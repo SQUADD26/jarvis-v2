@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     voice_max_recording: float = Field(default=30.0, alias="VOICE_MAX_RECORDING")
     deepgram_tts_model: str = Field(default="aura-orion-en", alias="DEEPGRAM_TTS_MODEL")
 
+    # Crawl4AI
+    crawl4ai_url: str = Field(default="http://srv938822.hstgr.cloud:11235", alias="CRAWL4AI_URL")
+
     # Worker
     worker_id: str = Field(default="worker-1", alias="WORKER_ID")
     worker_poll_interval_active: float = 0.5   # Polling ogni 500ms quando attivo
