@@ -56,7 +56,10 @@ class Crawl4AIClient:
             "urls": [url],
             "crawler_config": {
                 "max_depth": max_depth,
-                "max_pages": max_pages
+                "max_pages": max_pages,
+                "wait_for": "css:article, css:.markdown, css:main, css:[class*='content']",
+                "page_timeout": 30000,  # 30 seconds for JS rendering
+                "delay_before_return_html": 2.0  # Wait 2s after page load
             },
             "extract_config": {
                 "mode": "markdown" if extract_markdown else "raw_html"
@@ -280,7 +283,11 @@ class Crawl4AIClient:
         """Scrape a single page without following links."""
         payload = {
             "urls": [url],
-            "crawler_config": {},
+            "crawler_config": {
+                "wait_for": "css:article, css:.markdown, css:main, css:[class*='content']",
+                "page_timeout": 30000,  # 30 seconds for JS rendering
+                "delay_before_return_html": 2.0  # Wait 2s after page load
+            },
             "extract_config": {
                 "mode": "markdown"
             }
