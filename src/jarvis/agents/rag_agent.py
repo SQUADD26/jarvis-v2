@@ -32,7 +32,7 @@ RAG_TOOLS = [
         "parameters": {
             "url": "L'URL iniziale della documentazione",
             "title": "Titolo della collezione",
-            "max_pages": "Numero massimo di pagine da importare (default: 50)"
+            "max_pages": "Numero massimo di pagine da importare (default: 500)"
         }
     },
     {
@@ -68,8 +68,8 @@ REGOLE:
 ESEMPI:
 - "cerca info sul progetto Alpha" → {{"tool": "search_knowledge", "params": {{"query": "progetto Alpha"}}}}
 - "salva questa pagina https://..." → {{"tool": "ingest_url", "params": {{"url": "https://..."}}}}
-- "importa la documentazione di https://docs.example.com" → {{"tool": "ingest_documentation", "params": {{"url": "https://docs.example.com", "title": "Example Docs", "max_pages": 50}}}}
-- "ingerisci questo sito https://wiki.example.com" → {{"tool": "ingest_documentation", "params": {{"url": "https://wiki.example.com", "title": "Wiki", "max_pages": 50}}}}
+- "importa la documentazione di https://docs.example.com" → {{"tool": "ingest_documentation", "params": {{"url": "https://docs.example.com", "title": "Example Docs", "max_pages": 500}}}}
+- "ingerisci questo sito https://wiki.example.com" → {{"tool": "ingest_documentation", "params": {{"url": "https://wiki.example.com", "title": "Wiki", "max_pages": 500}}}}
 - "memorizza questa nota: ..." → {{"tool": "ingest_text", "params": {{"text": "...", "title": "Nota"}}}}
 - "che documenti ho" → {{"tool": "list_documents", "params": {{"limit": 10}}}}
 
@@ -193,7 +193,7 @@ class RAGAgent(BaseAgent):
         try:
             url = params.get("url", "")
             title = params.get("title")
-            max_pages = params.get("max_pages", 50)
+            max_pages = params.get("max_pages", 500)
 
             if not url:
                 return {"error": "URL mancante"}
@@ -203,7 +203,7 @@ class RAGAgent(BaseAgent):
                 url=url,
                 user_id=user_id,
                 title=title,
-                max_depth=2,
+                max_depth=3,  # Deeper for large documentation sites
                 max_pages=int(max_pages)
             )
 
