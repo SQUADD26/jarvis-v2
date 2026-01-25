@@ -15,8 +15,8 @@ class PerplexityClient:
     async def search(
         self,
         query: str,
-        model: str = "llama-3.1-sonar-small-128k-online",
-        max_tokens: int = 1024
+        model: str = "sonar",
+        max_tokens: int = 2048
     ) -> dict:
         """Search the web using Perplexity."""
         async with httpx.AsyncClient() as client:

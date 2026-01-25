@@ -8,30 +8,24 @@ dependencies = [
     "langgraph>=0.2.0",
     "langchain-core>=0.3.0",
     "langchain-google-genai>=2.0.0",
-
     # Database
     "supabase>=2.0.0",
     "redis>=5.0.0",
     "pgvector>=0.3.0",
     "langgraph-checkpoint-postgres>=2.0.0",
     "psycopg[binary,pool]>=3.0.0",
-
     # Google APIs
     "google-auth>=2.0.0",
     "google-auth-oauthlib>=1.0.0",
     "google-api-python-client>=2.0.0",
     "google-genai>=1.0.0",
-
     # External APIs
     "httpx>=0.27.0",
     "openai>=1.0.0",
-
     # Telegram
     "python-telegram-bot>=21.0",
-
     # Web Scraping
     "crawl4ai>=0.3.0",
-
     # Utilities
     "pydantic>=2.0.0",
     "pydantic-settings>=2.0.0",
@@ -40,17 +34,16 @@ dependencies = [
     "tenacity>=8.0.0",
     "numpy>=1.26.0",
     "dateparser>=1.2.0",
-
     # API Server (VPS)
     "fastapi>=0.115.0",
     "uvicorn>=0.30.0",
-
     # Voice (local client)
-    "pvporcupine>=3.0.0",      # Wake word detection (needs API key)
-    "pyaudio>=0.2.14",         # Audio capture
-    "sounddevice>=0.4.6",      # Audio playback
-    "webrtcvad>=2.0.10",       # Voice activity detection
-    "setuptools>=70.0.0",      # For pkg_resources (webrtcvad dependency)
+    "pvporcupine>=3.0.0", # Wake word detection (needs API key)
+    "pyaudio>=0.2.14", # Audio capture
+    "sounddevice>=0.4.6", # Audio playback
+    "webrtcvad>=2.0.10", # Voice activity detection
+    "setuptools>=70.0.0", # For pkg_resources (webrtcvad dependency)
+    "pypdf>=6.6.1",
 ]
 
 [project.optional-dependencies]

@@ -22,7 +22,9 @@ from jarvis.core.memory import memory
 from jarvis.db.repositories import ChatRepository, TaskRepository, LLMLogsRepository
 from jarvis.db.redis_client import redis_client
 from jarvis.integrations.deepgram_stt import deepgram
+from jarvis.rag.ingestion import ingestion_pipeline
 from jarvis.utils.logging import get_logger
+from io import BytesIO
 from langchain_core.messages import HumanMessage, AIMessage
 from dateparser import parse as parse_date
 
@@ -445,6 +447,132 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
+async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle incoming document files (PDF, TXT, etc.)."""
+    user_id = update.effective_user.id
+    user_id_str = str(user_id)
+
+    if not is_authorized(user_id):
+        return
+
+    document = update.message.document
+    if not document:
+        return
+
+    file_name = document.file_name or "documento"
+    mime_type = document.mime_type or ""
+
+    # Check supported file types
+    supported_types = {
+        "application/pdf": "pdf",
+        "text/plain": "txt",
+        "text/markdown": "md",
+        "text/html": "html",
+    }
+
+    file_type = None
+    for mime, ftype in supported_types.items():
+        if mime in mime_type or file_name.lower().endswith(f".{ftype}"):
+            file_type = ftype
+            break
+
+    if not file_type:
+        await update.message.reply_text(
+            f"⚠️ Formato non supportato: {mime_type or file_name}\n\n"
+            "Formati supportati: PDF, TXT, MD, HTML"
+        )
+        return
+
+    # Send acknowledgment
+    ack_message = await update.message.reply_text(
+        f"📄 Sto elaborando '{file_name}'..."
+    )
+
+    try:
+        # Download the file
+        file = await context.bot.get_file(document.file_id)
+        file_bytes = await file.download_as_bytearray()
+
+        # Extract text based on file type
+        if file_type == "pdf":
+            text = await extract_pdf_text(bytes(file_bytes))
+        else:
+            # TXT, MD, HTML - decode as text
+            try:
+                text = bytes(file_bytes).decode("utf-8")
+            except UnicodeDecodeError:
+                text = bytes(file_bytes).decode("latin-1")
+
+        if not text or len(text.strip()) < 50:
+            await ack_message.edit_text(
+                "⚠️ Il file non contiene abbastanza testo da elaborare."
+            )
+            return
+
+        # Update status
+        await ack_message.edit_text(
+            f"📄 Elaborazione '{file_name}'...\n"
+            f"Trovati {len(text)} caratteri, sto indicizzando..."
+        )
+
+        # Ingest into RAG
+        result = await ingestion_pipeline.ingest_text(
+            text=text,
+            user_id=user_id_str,
+            title=file_name,
+            source_type="file" if file_type == "pdf" else "text",
+            custom_metadata={
+                "file_name": file_name,
+                "file_type": file_type,
+                "file_size": document.file_size
+            }
+        )
+
+        if result.get("success"):
+            await ack_message.edit_text(
+                f"✅ '{file_name}' importato con successo!\n\n"
+                f"📊 {result.get('chunks_count', 0)} chunks creati\n"
+                f"🔍 Ora puoi cercare informazioni da questo documento."
+            )
+        else:
+            error = result.get("error", "Errore sconosciuto")
+            await ack_message.edit_text(f"❌ Errore: {error}")
+
+    except Exception as e:
+        logger.error(f"Error processing document: {e}", exc_info=True)
+        await ack_message.edit_text(
+            "❌ Errore nell'elaborazione del file. Riprova."
+        )
+
+
+async def extract_pdf_text(pdf_bytes: bytes) -> str:
+    """Extract text from PDF bytes using pypdf (runs in thread pool to avoid blocking)."""
+    import concurrent.futures
+
+    def _extract_sync() -> str:
+        from pypdf import PdfReader
+
+        reader = PdfReader(BytesIO(pdf_bytes))
+        text_parts = []
+
+        for page_num, page in enumerate(reader.pages):
+            page_text = page.extract_text()
+            if page_text:
+                text_parts.append(f"--- Pagina {page_num + 1} ---\n{page_text}")
+
+        return "\n\n".join(text_parts)
+
+    try:
+        loop = asyncio.get_event_loop()
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            text = await loop.run_in_executor(pool, _extract_sync)
+        return text
+
+    except Exception as e:
+        logger.error(f"PDF extraction failed: {e}")
+        raise ValueError(f"Impossibile leggere il PDF: {e}")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming text messages."""
     user_id = update.effective_user.id
@@ -511,6 +639,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
+    app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
 
     return app
 
