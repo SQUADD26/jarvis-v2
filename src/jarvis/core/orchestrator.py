@@ -265,6 +265,9 @@ jarvis_graph = build_graph()
 
 async def process_message(user_id: str, message: str, history: list = None) -> str:
     """Main entry point to process a user message."""
+    # Set user context for LLM logging
+    gemini.set_user_context(user_id)
+
     # Build initial state
     messages = history or []
     messages.append(HumanMessage(content=message))

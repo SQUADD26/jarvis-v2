@@ -40,7 +40,7 @@ from jarvis.core.orchestrator import process_message
 from jarvis.core.router import router
 from jarvis.core.freshness import freshness
 from jarvis.core.memory import memory
-from jarvis.db.repositories import ChatRepository, TaskRepository
+from jarvis.db.repositories import ChatRepository, TaskRepository, LLMLogsRepository
 from jarvis.utils.logging import get_logger
 from langchain_core.messages import HumanMessage, AIMessage
 from dateparser import parse as parse_date
@@ -132,6 +132,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/memory - Mostra fatti memorizzati\n"
         "/remind <quando> <messaggio> - Imposta promemoria\n"
         "/tasks - Mostra i tuoi task pendenti\n"
+        "/costs - Mostra costi LLM\n"
         "/clear - Pulisci cronologia conversazione\n"
     )
 
@@ -328,6 +329,41 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Errore nel recuperare i task.")
 
 
+async def costs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /costs command - show LLM usage costs."""
+    user_id = update.effective_user.id
+    user_id_str = str(user_id)
+
+    if not is_authorized(user_id):
+        return
+
+    try:
+        # Get today's cost
+        today_cost = await LLMLogsRepository.get_total_cost_today(user_id_str)
+
+        # Get costs by model for last 30 days
+        costs = await LLMLogsRepository.get_costs_by_period(user_id=user_id_str)
+
+        text = f"Costi LLM:\n\nOggi: ${today_cost:.4f}\n"
+
+        if costs:
+            text += "\nUltimi 30 giorni per modello:\n"
+            total = 0
+            for c in costs:
+                model_cost = float(c.get("total_cost", 0) or 0)
+                total += model_cost
+                text += f"  {c['provider']}/{c['model']}: ${model_cost:.4f} ({c['requests']} req)\n"
+            text += f"\nTotale: ${total:.4f}"
+        else:
+            text += "\nNessun dato disponibile per gli ultimi 30 giorni."
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Error fetching costs: {e}")
+        await update.message.reply_text("Errore nel recuperare i costi.")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages."""
     user_id = update.effective_user.id
@@ -390,6 +426,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("memory", memory_command))
     app.add_handler(CommandHandler("remind", remind_command))
     app.add_handler(CommandHandler("tasks", tasks_command))
+    app.add_handler(CommandHandler("costs", costs_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 

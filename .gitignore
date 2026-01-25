@@ -70,3 +70,9 @@ docker-compose.override.yml
 
 # Supabase CLI
 supabase/.temp/
+
+# Local files
+.serena/
+CLAUDE.md
+*.copia.md
+*copia.md

@@ -175,6 +175,80 @@ class UserPreferencesRepository:
         return result.data[0] if result.data else None
 
 
+class LLMLogsRepository:
+    """Repository per analytics LLM calls."""
+
+    @staticmethod
+    async def get_costs_by_period(
+        start_date: datetime = None,
+        end_date: datetime = None,
+        user_id: str = None
+    ) -> list[dict]:
+        """Get aggregated costs by provider/model for a period."""
+        db = get_db()
+        params = {}
+        if start_date:
+            params["p_start_date"] = start_date.isoformat()
+        if end_date:
+            params["p_end_date"] = end_date.isoformat()
+        if user_id:
+            params["p_user_id"] = user_id
+
+        result = db.rpc("get_llm_costs", params).execute()
+        return result.data if result.data else []
+
+    @staticmethod
+    async def get_recent_logs(
+        user_id: str = None,
+        limit: int = 50,
+        include_errors_only: bool = False
+    ) -> list[dict]:
+        """Get recent LLM logs."""
+        db = get_db()
+        query = db.table("llm_logs") \
+            .select("*") \
+            .order("created_at", desc=True) \
+            .limit(limit)
+
+        if user_id:
+            query = query.eq("user_id", user_id)
+        if include_errors_only:
+            query = query.eq("is_error", True)
+
+        result = query.execute()
+        return result.data if result.data else []
+
+    @staticmethod
+    async def get_daily_stats(days: int = 30) -> list[dict]:
+        """Get daily aggregated stats."""
+        db = get_db()
+        result = db.from_("llm_stats_daily") \
+            .select("*") \
+            .order("date", desc=True) \
+            .limit(days) \
+            .execute()
+        return result.data if result.data else []
+
+    @staticmethod
+    async def get_total_cost_today(user_id: str = None) -> float:
+        """Get total cost for today."""
+        db = get_db()
+        from datetime import date
+        today = date.today().isoformat()
+
+        query = db.table("llm_logs") \
+            .select("total_cost") \
+            .gte("created_at", today)
+
+        if user_id:
+            query = query.eq("user_id", user_id)
+
+        result = query.execute()
+        if result.data:
+            return sum(r.get("total_cost", 0) or 0 for r in result.data)
+        return 0.0
+
+
 class TaskRepository:
     """Repository per gestione task queue (proattività e parallelismo)."""
 
