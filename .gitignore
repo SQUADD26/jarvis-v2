@@ -73,6 +73,5 @@ supabase/.temp/
 
 # Local files
 .serena/
-CLAUDE.md
 *.copia.md
 *copia.md
