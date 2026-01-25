@@ -89,12 +89,26 @@ class Crawl4AIClient:
 
             result = results[0] if results else {}
 
+            # Extract markdown content - Crawl4AI returns markdown as a dict
+            markdown_data = result.get("markdown", {})
+            if isinstance(markdown_data, dict):
+                content = markdown_data.get("raw_markdown", "") or markdown_data.get("fit_markdown", "")
+            else:
+                content = markdown_data or ""
+
+            # Extract links
+            links_data = result.get("links", {})
+            if isinstance(links_data, dict):
+                links = links_data.get("internal", [])[:10]
+            else:
+                links = []
+
             return {
                 "url": url,
                 "title": result.get("metadata", {}).get("title", "") or result.get("title", ""),
-                "content": result.get("markdown", "") or result.get("content", ""),
+                "content": content,
                 "success": result.get("success", True),
-                "links": result.get("links", {}).get("internal", [])[:10] if isinstance(result.get("links"), dict) else []
+                "links": links
             }
 
         except httpx.HTTPStatusError as e:
