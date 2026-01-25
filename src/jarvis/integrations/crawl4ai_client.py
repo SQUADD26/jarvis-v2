@@ -57,9 +57,10 @@ class Crawl4AIClient:
             "crawler_config": {
                 "max_depth": max_depth,
                 "max_pages": max_pages,
-                "wait_for": "css:article, css:.markdown, css:main, css:[class*='content']",
-                "page_timeout": 30000,  # 30 seconds for JS rendering
-                "delay_before_return_html": 2.0  # Wait 2s after page load
+                "wait_until": "networkidle",  # Wait for all network requests
+                "page_timeout": 60000,  # 60 seconds for JS rendering
+                "wait_for": "css:article",  # Wait for article element (Docusaurus)
+                "wait_for_timeout": 30000  # 30s timeout for wait_for
             },
             "extract_config": {
                 "mode": "markdown" if extract_markdown else "raw_html"
@@ -284,9 +285,10 @@ class Crawl4AIClient:
         payload = {
             "urls": [url],
             "crawler_config": {
-                "wait_for": "css:article, css:.markdown, css:main, css:[class*='content']",
-                "page_timeout": 30000,  # 30 seconds for JS rendering
-                "delay_before_return_html": 2.0  # Wait 2s after page load
+                "wait_until": "networkidle",  # Wait for all network requests
+                "page_timeout": 60000,  # 60 seconds for JS rendering
+                "wait_for": "css:article",  # Wait for article element (Docusaurus)
+                "wait_for_timeout": 30000  # 30s timeout for wait_for
             },
             "extract_config": {
                 "mode": "markdown"
