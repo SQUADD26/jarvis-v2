@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # Voice (local client)
     porcupine_access_key: str = Field(default="", alias="PORCUPINE_ACCESS_KEY")
     voice_mode: str = Field(default="ptt", alias="VOICE_MODE")  # "ptt" or "wake_word"
-    voice_ptt_key: str = Field(default="<cmd>+<shift>+j", alias="VOICE_PTT_KEY")
+    voice_ptt_key: str = Field(default="<cmd>+j", alias="VOICE_PTT_KEY")
     voice_sensitivity: float = Field(default=0.5, alias="VOICE_SENSITIVITY")
     voice_silence_timeout: float = Field(default=2.0, alias="VOICE_SILENCE_TIMEOUT")
     voice_max_recording: float = Field(default=30.0, alias="VOICE_MAX_RECORDING")
