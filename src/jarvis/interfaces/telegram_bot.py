@@ -416,7 +416,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        await update.message.reply_text(response)
+        await update.message.reply_text(response, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Error processing voice message: {e}", exc_info=True)
@@ -465,8 +465,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass  # Ignore if we can't delete (e.g., message too old)
 
-        # Send response
-        await update.message.reply_text(response)
+        # Send response with HTML parsing
+        await update.message.reply_text(response, parse_mode="HTML")
 
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)
