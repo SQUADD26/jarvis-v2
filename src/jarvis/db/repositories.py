@@ -143,6 +143,18 @@ class RAGRepository:
             .execute()
         return len(result.data) > 0 if result.data else False
 
+    @staticmethod
+    async def list_documents(user_id: str, limit: int = 10) -> list[dict]:
+        """List documents for a user."""
+        db = get_db()
+        result = db.table("rag_documents") \
+            .select("id, title, created_at, source_url") \
+            .eq("user_id", user_id) \
+            .order("created_at", desc=True) \
+            .limit(limit) \
+            .execute()
+        return result.data if result.data else []
+
 
 class UserPreferencesRepository:
     """Repository per gestione preferenze utente."""
