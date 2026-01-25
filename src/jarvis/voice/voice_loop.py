@@ -220,11 +220,11 @@ class VoiceClient:
                 logger.debug("Audio too short, ignoring")
                 return
 
-            # Transcribe with Deepgram
+            # Transcribe with Deepgram (raw PCM 16kHz)
             logger.info("Transcribing...")
-            transcript = await deepgram.transcribe_bytes(
+            transcript = await deepgram.transcribe_pcm(
                 audio_data=audio_data,
-                filename="voice_command.wav",
+                sample_rate=16000,
                 language="it",
                 user_id=VOICE_USER_ID
             )

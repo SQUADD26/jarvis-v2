@@ -197,6 +197,99 @@ class DeepgramClient:
             user_id=user_id
         )
 
+    async def transcribe_pcm(
+        self,
+        audio_data: bytes,
+        sample_rate: int = 16000,
+        language: str = "it",
+        user_id: str = None
+    ) -> str:
+        """
+        Transcribe raw PCM audio (linear16) directly.
+
+        Args:
+            audio_data: Raw PCM bytes (16-bit signed, mono)
+            sample_rate: Sample rate in Hz
+            language: Language code
+            user_id: User ID for logging
+
+        Returns:
+            Transcribed text
+        """
+        effective_user_id = user_id or self._current_user_id
+
+        log_entry = LLMLogEntry(
+            provider="deepgram",
+            model=self.model,
+            user_prompt=f"[AUDIO PCM] {len(audio_data)} bytes",
+            user_id=effective_user_id,
+            metadata={
+                "type": "transcription",
+                "language": language,
+                "file_size": len(audio_data),
+                "encoding": "linear16",
+                "sample_rate": sample_rate,
+            }
+        )
+        log_entry.start_timer()
+
+        try:
+            # Build URL with PCM-specific parameters
+            params = {
+                "model": self.model,
+                "language": language,
+                "encoding": "linear16",
+                "sample_rate": str(sample_rate),
+                "channels": "1",
+                "smart_format": "true",
+                "punctuate": "true",
+            }
+
+            url = f"{self.base_url}?" + "&".join(f"{k}={v}" for k, v in params.items())
+
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    url,
+                    headers={
+                        "Authorization": f"Token {self.api_key}",
+                        "Content-Type": "audio/raw",
+                    },
+                    content=audio_data,
+                )
+                response.raise_for_status()
+                result = response.json()
+
+            # Extract transcript
+            transcript = ""
+            if result.get("results", {}).get("channels"):
+                alternatives = result["results"]["channels"][0].get("alternatives", [])
+                if alternatives:
+                    transcript = alternatives[0].get("transcript", "")
+
+            duration_seconds = result.get("metadata", {}).get("duration", 0)
+            duration_minutes = duration_seconds / 60 if duration_seconds else 0.1
+            estimated_cost = duration_minutes * DEEPGRAM_COST_PER_MINUTE
+
+            log_entry.stop_timer()
+            log_entry.response = transcript
+            log_entry.finish_reason = "stop"
+            log_entry.metadata["duration_seconds"] = duration_seconds
+            log_entry.metadata["estimated_cost"] = estimated_cost
+
+            await llm_logger.log(log_entry)
+
+            logger.info(f"Transcribed PCM audio: {len(transcript)} chars, {duration_seconds:.1f}s")
+            return transcript
+
+        except Exception as e:
+            log_entry.stop_timer()
+            log_entry.is_error = True
+            log_entry.error_message = str(e)
+            await llm_logger.log(log_entry)
+
+            logger.error(f"Deepgram PCM transcription failed: {e}")
+            raise
+
 
 # Singleton
 deepgram = DeepgramClient()
