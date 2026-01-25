@@ -49,6 +49,7 @@ INTENT_CATEGORIES = {
     "rag_query": ["rag"],
     "rag_ingest": ["rag"],
     "chitchat": [],  # No agents needed
-    "complex": [],   # Will be determined by planner
+    "complex": [],   # Fallback - planner will determine agents
+    "planned": [],   # Agents determined by LLM planner
     "unknown": []
 }

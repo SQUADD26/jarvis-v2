@@ -5,6 +5,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from jarvis.core.state import JarvisState, INTENT_CATEGORIES
 from jarvis.core.router import router
+from jarvis.core.planner import planner
 from jarvis.core.memory import memory
 from jarvis.core.freshness import freshness
 from jarvis.agents import AGENTS
@@ -38,12 +39,23 @@ Dati disponibili dagli agenti:
 async def analyze_intent(state: JarvisState) -> JarvisState:
     """Analyze user intent and determine required agents."""
     user_input = state["current_input"]
+    user_id = state["user_id"]
 
-    # Use semantic router
+    # Use semantic router first (fast, no LLM call)
     intent, confidence = await router.route(user_input)
 
-    # Get required agents
+    # Get required agents from router
     required_agents = router.get_required_agents(intent)
+
+    # If intent is complex/unknown OR confidence is low, use LLM planner
+    if intent in ("complex", "unknown") or (confidence < 0.80 and not required_agents):
+        logger.info(f"Router uncertain (intent={intent}, conf={confidence:.2f}), using planner...")
+        planned_agents = await planner.plan(user_input, user_id)
+
+        if planned_agents:
+            required_agents = planned_agents
+            intent = "planned"  # Mark as planned for logging
+        # If planner returns empty, it's likely chitchat - keep as is
 
     logger.info(f"Intent: {intent} (confidence={confidence:.2f}), agents: {required_agents}")
 
