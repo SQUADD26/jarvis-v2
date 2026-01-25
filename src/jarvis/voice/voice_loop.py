@@ -109,7 +109,7 @@ class VoiceClient:
         print(f"  JARVIS Voice Client Ready")
         print(f"  Mode: {self._mode.upper()}")
         if self._mode == "ptt":
-            print(f"  Hotkey: {self._settings.voice_ptt_key}")
+            print(f"  Attivazione: Premi INVIO")
         else:
             print(f"  Wake word: 'Jarvis'")
         print(f"  API: {self._settings.jarvis_api_url}")

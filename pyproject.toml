@@ -50,7 +50,6 @@ dependencies = [
     "pyaudio>=0.2.14",         # Audio capture
     "sounddevice>=0.4.6",      # Audio playback
     "webrtcvad>=2.0.10",       # Voice activity detection
-    "pynput>=1.7.6",           # Global hotkeys for PTT
     "setuptools>=70.0.0",      # For pkg_resources (webrtcvad dependency)
 ]
 
