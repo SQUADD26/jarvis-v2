@@ -1,9 +1,12 @@
-from typing import Optional
+from typing import Optional, Literal
 from datetime import datetime
 from jarvis.db.supabase_client import get_db
 from jarvis.utils.logging import get_logger
 
 logger = get_logger(__name__)
+
+TaskStatus = Literal["pending", "claimed", "running", "completed", "failed", "cancelled"]
+TaskType = Literal["reminder", "scheduled_check", "long_running"]
 
 
 class ChatRepository:
@@ -170,3 +173,133 @@ class UserPreferencesRepository:
             .eq("user_id", user_id) \
             .execute()
         return result.data[0] if result.data else None
+
+
+class TaskRepository:
+    """Repository per gestione task queue (proattività e parallelismo)."""
+
+    @staticmethod
+    async def enqueue(
+        user_id: str,
+        task_type: TaskType,
+        payload: dict,
+        scheduled_at: datetime = None,
+        priority: int = 5
+    ) -> dict:
+        """Accoda un nuovo task."""
+        db = get_db()
+        data = {
+            "user_id": user_id,
+            "task_type": task_type,
+            "payload": payload,
+            "priority": priority
+        }
+        if scheduled_at:
+            data["scheduled_at"] = scheduled_at.isoformat()
+
+        result = db.table("task_queue").insert(data).execute()
+        return result.data[0] if result.data else None
+
+    @staticmethod
+    async def claim_next(worker_id: str) -> Optional[dict]:
+        """Claim atomico del prossimo task disponibile."""
+        db = get_db()
+        result = db.rpc("claim_next_task", {"p_worker_id": worker_id}).execute()
+        return result.data if result.data else None
+
+    @staticmethod
+    async def start_task(task_id: str) -> dict:
+        """Marca un task come running."""
+        db = get_db()
+        result = db.table("task_queue") \
+            .update({
+                "status": "running",
+                "started_at": datetime.utcnow().isoformat(),
+                "updated_at": datetime.utcnow().isoformat()
+            }) \
+            .eq("id", task_id) \
+            .execute()
+        return result.data[0] if result.data else None
+
+    @staticmethod
+    async def complete_task(task_id: str, result_data: dict = None) -> dict:
+        """Completa un task con successo."""
+        db = get_db()
+        result = db.rpc("complete_task", {
+            "p_task_id": task_id,
+            "p_result": result_data
+        }).execute()
+        return result.data if result.data else None
+
+    @staticmethod
+    async def fail_task(task_id: str, error: str) -> dict:
+        """Marca un task come fallito (con retry automatico se possibile)."""
+        db = get_db()
+        result = db.rpc("fail_task", {
+            "p_task_id": task_id,
+            "p_error": error
+        }).execute()
+        return result.data if result.data else None
+
+    @staticmethod
+    async def cancel_task(task_id: str) -> dict:
+        """Cancella un task pendente."""
+        db = get_db()
+        result = db.table("task_queue") \
+            .update({
+                "status": "cancelled",
+                "updated_at": datetime.utcnow().isoformat()
+            }) \
+            .eq("id", task_id) \
+            .in_("status", ["pending", "claimed"]) \
+            .execute()
+        return result.data[0] if result.data else None
+
+    @staticmethod
+    async def get_user_tasks(
+        user_id: str,
+        status: TaskStatus = None,
+        limit: int = 20
+    ) -> list[dict]:
+        """Recupera i task di un utente."""
+        db = get_db()
+        query = db.table("task_queue") \
+            .select("*") \
+            .eq("user_id", user_id) \
+            .order("created_at", desc=True) \
+            .limit(limit)
+
+        if status:
+            query = query.eq("status", status)
+
+        result = query.execute()
+        return result.data if result.data else []
+
+    @staticmethod
+    async def get_pending_count() -> int:
+        """Conta i task pendenti (per monitoring)."""
+        db = get_db()
+        result = db.table("task_queue") \
+            .select("id", count="exact") \
+            .eq("status", "pending") \
+            .execute()
+        return result.count if result.count else 0
+
+    @staticmethod
+    async def get_task(task_id: str) -> Optional[dict]:
+        """Recupera un singolo task."""
+        db = get_db()
+        result = db.table("task_queue") \
+            .select("*") \
+            .eq("id", task_id) \
+            .execute()
+        return result.data[0] if result.data else None
+
+    @staticmethod
+    async def cleanup_stale_tasks(timeout_minutes: int = 30) -> int:
+        """Resetta task bloccati in stato 'claimed' o 'running' troppo a lungo."""
+        db = get_db()
+        result = db.rpc("cleanup_stale_tasks", {
+            "p_timeout_minutes": timeout_minutes
+        }).execute()
+        return result.data if isinstance(result.data, int) else 0

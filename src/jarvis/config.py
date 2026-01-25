@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     supabase_url: str = Field(..., alias="SUPABASE_URL")
     supabase_key: str = Field(..., alias="SUPABASE_KEY")
     supabase_service_key: str = Field(..., alias="SUPABASE_SERVICE_KEY")
+    supabase_postgres_url: str = Field(default="", alias="SUPABASE_POSTGRES_URL")  # For checkpointing
 
     # Redis
     redis_url: str = Field(default="redis://localhost:6379/0", alias="REDIS_URL")
@@ -39,6 +40,12 @@ class Settings(BaseSettings):
     # LLM
     default_model: str = "gemini-2.0-flash"
     powerful_model: str = "gemini-2.5-pro-preview-05-06"
+
+    # Worker
+    worker_id: str = Field(default="worker-1", alias="WORKER_ID")
+    worker_poll_interval_active: float = 0.5   # Polling ogni 500ms quando attivo
+    worker_poll_interval_idle: float = 2.0     # Backoff a 2s quando idle
+    worker_stale_timeout_minutes: int = 30     # Timeout per task bloccati
 
     model_config = {
         "env_file": ".env",

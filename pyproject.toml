@@ -13,6 +13,8 @@ dependencies = [
     "supabase>=2.0.0",
     "redis>=5.0.0",
     "pgvector>=0.3.0",
+    "langgraph-checkpoint-postgres>=2.0.0",
+    "psycopg[binary,pool]>=3.0.0",
 
     # Google APIs
     "google-auth>=2.0.0",
@@ -37,6 +39,7 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "tenacity>=8.0.0",
     "numpy>=1.26.0",
+    "dateparser>=1.2.0",
 ]
 
 [project.optional-dependencies]

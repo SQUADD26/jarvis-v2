@@ -40,9 +40,10 @@ from jarvis.core.orchestrator import process_message
 from jarvis.core.router import router
 from jarvis.core.freshness import freshness
 from jarvis.core.memory import memory
-from jarvis.db.repositories import ChatRepository
+from jarvis.db.repositories import ChatRepository, TaskRepository
 from jarvis.utils.logging import get_logger
 from langchain_core.messages import HumanMessage, AIMessage
+from dateparser import parse as parse_date
 
 logger = get_logger(__name__)
 settings = get_settings()
@@ -129,6 +130,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help - Mostra questo messaggio\n"
         "/refresh [calendar|email|all] - Aggiorna cache\n"
         "/memory - Mostra fatti memorizzati\n"
+        "/remind <quando> <messaggio> - Imposta promemoria\n"
+        "/tasks - Mostra i tuoi task pendenti\n"
         "/clear - Pulisci cronologia conversazione\n"
     )
 
@@ -191,6 +194,140 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Cronologia conversazione cancellata!")
 
 
+async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /remind command."""
+    user_id = update.effective_user.id
+    user_id_str = str(user_id)
+
+    if not is_authorized(user_id):
+        return
+
+    args = context.args
+    if not args or len(args) < 2:
+        await update.message.reply_text(
+            "Uso: /remind <quando> <messaggio>\n"
+            "Esempi:\n"
+            "  /remind domani alle 9 Chiamare il dottore\n"
+            "  /remind tra 30 minuti Controllare la mail\n"
+            "  /remind lunedi prossimo Meeting settimanale"
+        )
+        return
+
+    # Parse the entire text after /remind
+    full_text = " ".join(args)
+
+    # Try to parse the date/time from the beginning
+    parsed_date = None
+    message = full_text
+
+    # Try to find a time expression at the beginning
+    try:
+        parsed_date = parse_date(
+            full_text,
+            languages=["it", "en"],
+            settings={
+                "PREFER_DATES_FROM": "future",
+                "RELATIVE_BASE": None
+            }
+        )
+        if parsed_date:
+            # Find where the date expression ends
+            # Simple heuristic: the message starts after common time words
+            time_words = [
+                "alle", "dopo", "fra", "tra", "domani", "oggi",
+                "lunedi", "martedi", "mercoledi", "giovedi", "venerdi", "sabato", "domenica",
+                "prossimo", "prossima", "minuti", "ore", "giorni"
+            ]
+            words = full_text.split()
+            msg_start = 0
+            for i, word in enumerate(words):
+                if any(tw in word.lower() for tw in time_words) or word[0].isdigit():
+                    msg_start = i + 1
+                else:
+                    break
+            message = " ".join(words[msg_start:]) if msg_start < len(words) else full_text
+    except Exception:
+        pass
+
+    if not parsed_date:
+        await update.message.reply_text(
+            "Non ho capito quando vuoi il promemoria.\n"
+            "Prova con: 'domani alle 9', 'tra 30 minuti', 'lunedi prossimo'"
+        )
+        return
+
+    if not message or message == full_text:
+        message = "Promemoria"
+
+    # Create the reminder task
+    try:
+        task = await TaskRepository.enqueue(
+            user_id=user_id_str,
+            task_type="reminder",
+            payload={"message": message},
+            scheduled_at=parsed_date,
+            priority=3  # Higher priority for reminders
+        )
+
+        if task:
+            formatted_date = parsed_date.strftime("%d/%m/%Y alle %H:%M")
+            await update.message.reply_text(
+                f"Promemoria impostato per {formatted_date}\n"
+                f"Messaggio: {message}"
+            )
+        else:
+            await update.message.reply_text("Errore nell'impostare il promemoria. Riprova.")
+
+    except Exception as e:
+        logger.error(f"Error creating reminder: {e}")
+        await update.message.reply_text("Errore nell'impostare il promemoria. Riprova.")
+
+
+async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /tasks command - show pending tasks."""
+    user_id = update.effective_user.id
+    user_id_str = str(user_id)
+
+    if not is_authorized(user_id):
+        return
+
+    try:
+        tasks = await TaskRepository.get_user_tasks(user_id_str, limit=10)
+
+        if not tasks:
+            await update.message.reply_text("Non hai task in corso.")
+            return
+
+        text = "I tuoi task:\n\n"
+        for task in tasks:
+            status_emoji = {
+                "pending": "....",
+                "claimed": "...",
+                "running": "..",
+                "completed": ".",
+                "failed": "!",
+                "cancelled": "x"
+            }.get(task["status"], "?")
+
+            task_type = task["task_type"]
+            payload = task.get("payload", {})
+            description = payload.get("message", payload.get("query", ""))[:30]
+
+            if task.get("scheduled_at"):
+                from datetime import datetime
+                scheduled = datetime.fromisoformat(task["scheduled_at"].replace("Z", "+00:00"))
+                time_str = scheduled.strftime("%d/%m %H:%M")
+                text += f"{status_emoji} [{task_type}] {time_str} - {description}\n"
+            else:
+                text += f"{status_emoji} [{task_type}] {description}\n"
+
+        await update.message.reply_text(text)
+
+    except Exception as e:
+        logger.error(f"Error fetching tasks: {e}")
+        await update.message.reply_text("Errore nel recuperare i task.")
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming messages."""
     user_id = update.effective_user.id
@@ -251,6 +388,8 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("refresh", refresh_command))
     app.add_handler(CommandHandler("memory", memory_command))
+    app.add_handler(CommandHandler("remind", remind_command))
+    app.add_handler(CommandHandler("tasks", tasks_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
