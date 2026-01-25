@@ -8,7 +8,7 @@ logger = get_logger(__name__)
 
 # Available agents and their capabilities
 AGENT_CAPABILITIES = {
-    "calendar": "Accesso al calendario Google: leggere eventi, appuntamenti, riunioni, impegni, agenda, disponibilità",
+    "calendar": "Accesso al calendario Google: leggere eventi, CREARE nuovi eventi, modificare, cancellare, bloccare slot, fissare appuntamenti",
     "email": "Accesso a Gmail: leggere email, scrivere email, creare bozze, rispondere, cercare messaggi",
     "web": "Ricerca web: cercare informazioni online, meteo, notizie, fatti attuali",
     "rag": "Knowledge base personale: cercare nei documenti dell'utente, file caricati, note"
