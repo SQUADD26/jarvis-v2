@@ -7,7 +7,7 @@ from jarvis.core.state import JarvisState
 from jarvis.integrations.gemini import gemini
 from jarvis.rag.hybrid_search import hybrid_rag
 from jarvis.rag.ingestion import ingestion_pipeline
-from jarvis.db.repositories import RAGRepository
+from jarvis.db.repositories import RAGRepository, TaskRepository
 
 # Tool definitions for the LLM
 RAG_TOOLS = [
@@ -201,37 +201,39 @@ class RAGAgent(BaseAgent):
             return {"error": f"Errore nell'importazione: {str(e)}"}
 
     async def _tool_ingest_documentation(self, params: dict, user_id: str) -> dict:
-        """Deep crawl and ingest documentation (multi-page)."""
+        """Deep crawl and ingest documentation (multi-page) - runs in background."""
         try:
             url = params.get("url", "")
-            title = params.get("title")
+            title = params.get("title", url)
             max_pages = params.get("max_pages", 500)
 
             if not url:
                 return {"error": "URL mancante"}
 
-            # Use deep ingestion
-            result = await ingestion_pipeline.ingest_url_deep(
-                url=url,
+            # Queue the task for background processing
+            task = await TaskRepository.enqueue(
                 user_id=user_id,
-                title=title,
-                max_depth=3,  # Deeper for large documentation sites
-                max_pages=int(max_pages)
+                task_type="rag_deep_crawl",
+                payload={
+                    "url": url,
+                    "title": title,
+                    "max_depth": 3,
+                    "max_pages": int(max_pages),
+                    "notify": True
+                }
             )
 
-            if result["success"]:
+            if task:
                 return {
                     "operation": "ingest_documentation",
                     "success": True,
+                    "queued": True,
+                    "task_id": task.get("id"),
                     "url": url,
-                    "title": result.get("title"),
-                    "pages_ingested": result.get("pages_ingested"),
-                    "total_pages_crawled": result.get("total_pages_crawled"),
-                    "chunks_count": result.get("chunks_count"),
-                    "message": f"Documentazione importata: {result.get('title')} - {result.get('pages_ingested')} pagine, {result.get('chunks_count')} chunks"
+                    "message": f"🚀 Importazione avviata in background per '{title}'. Ti notificherò quando sarà completata."
                 }
             else:
-                return {"error": result.get("error", "Errore nell'importazione")}
+                return {"error": "Errore nell'accodamento del task"}
 
         except Exception as e:
             self.logger.error(f"ingest_documentation failed: {e}")
