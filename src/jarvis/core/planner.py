@@ -49,7 +49,7 @@ class Planner:
     """LLM-based planner for determining required agents."""
 
     def __init__(self):
-        self.model = "gemini-2.5-flash-preview-05-20"
+        self.model = "gemini-2.5-flash"
 
     async def plan(self, user_input: str, user_id: str = None) -> list[str]:
         """

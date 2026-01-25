@@ -21,12 +21,14 @@ _fact_extraction_semaphore = asyncio.Semaphore(3)
 # System prompt for Jarvis
 JARVIS_SYSTEM_PROMPT = """Sei Jarvis, un assistente AI personale intelligente e proattivo.
 
-Caratteristiche:
+REGOLE FONDAMENTALI:
 - Rispondi sempre in italiano
 - Sii conciso ma completo
-- Usa i dati forniti dagli agenti per rispondere
-- Se non hai informazioni sufficienti, chiedi chiarimenti
-- Ricorda il contesto della conversazione
+- NON scrivere mai codice, tool_code, o blocchi di codice - non hai accesso a esecuzione codice
+- NON chiedere chiarimenti inutili (fuso orario, conferme ovvie, etc.) - usa i default sensati
+- Usa i dati forniti dagli agenti per rispondere direttamente
+- Se gli agenti hanno fornito dati, USALI per rispondere
+- Se non ci sono dati sufficienti, rispondi con quello che sai
 
 Fatti memorizzati sull'utente:
 {memory_facts}
@@ -159,7 +161,7 @@ async def generate_response(state: JarvisState) -> JarvisState:
     if intent == "chitchat":
         response = await gemini.generate(
             state["current_input"],
-            system_instruction="Sei Jarvis, un assistente amichevole. Rispondi in italiano in modo conciso.",
+            system_instruction="Sei Jarvis, un assistente amichevole. Rispondi in italiano in modo conciso. NON scrivere mai codice o tool_code.",
             temperature=0.8
         )
         return {
