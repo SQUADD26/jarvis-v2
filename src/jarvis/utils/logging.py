@@ -1,3 +1,4 @@
+import logging
 import structlog
 from jarvis.config import get_settings
 
@@ -19,7 +20,7 @@ def setup_logging():
     structlog.configure(
         processors=processors,
         wrapper_class=structlog.make_filtering_bound_logger(
-            getattr(structlog, settings.log_level.upper(), structlog.INFO)
+            getattr(logging, settings.log_level.upper(), logging.INFO)
         ),
         context_class=dict,
         logger_factory=structlog.PrintLoggerFactory(),

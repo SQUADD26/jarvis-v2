@@ -13,26 +13,7 @@ from telegram.constants import ChatAction
 
 # Varied acknowledgment messages for natural interaction
 ACKNOWLEDGMENT_MESSAGES = [
-    "Certamente, solo un attimo... ⏳",
-    "Un momento, ci penso subito... 🤔",
-    "Dammi un secondo... ⏳",
-    "Ci sono, fammi controllare... 👀",
-    "Subito, un attimo di pazienza... ⏳",
-    "Ok, verifico immediatamente... 🔍",
-    "Sì, dammi un istante... ⏳",
-    "Perfetto, controllo subito... ✨",
-    "Un secondo che verifico... 🔎",
-    "Certo, fammi dare un'occhiata... 👁️",
-    "Arrivo, solo un momento... ⏳",
-    "Ci sono sopra, un attimo... 💭",
-    "Ok, mi metto subito al lavoro... ⚡",
-    "Capito, dammi un secondo... ⏳",
-    "Sì sì, controllo subito... 🎯",
-    "Un momento che ci guardo... 👀",
-    "Perfetto, fammi vedere... 🔍",
-    "D'accordo, un istante... ⏳",
-    "Ricevuto, ci penso io... 💡",
-    "Aspetta un attimo che controllo... ⏳",
+    "JARVIS sta pensando...",
 ]
 
 from jarvis.config import get_settings

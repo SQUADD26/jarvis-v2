@@ -136,6 +136,7 @@ async def execute_agents(state: JarvisState) -> JarvisState:
 
 
 async def generate_response(state: JarvisState) -> JarvisState:
+    logger.info("Generating response...")
     """Generate final response using LLM."""
     intent = state["intent"]
     agent_results = state["agent_results"]

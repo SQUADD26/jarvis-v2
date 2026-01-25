@@ -18,11 +18,11 @@ class ModelPricing:
         cached_tokens: int = 0
     ) -> tuple[float, float, float]:
         """Calculate costs in USD. Returns (input_cost, output_cost, total_cost)."""
-        regular_input = input_tokens - cached_tokens
+        regular_input = input_tokens - (cached_tokens or 0)
 
-        input_cost = (regular_input / 1_000_000) * self.input
-        cached_cost = (cached_tokens / 1_000_000) * self.cached_input
-        output_cost = (output_tokens / 1_000_000) * self.output
+        input_cost = ((regular_input or 0) / 1_000_000) * self.input
+        cached_cost = ((cached_tokens or 0) / 1_000_000) * self.cached_input
+        output_cost = ((output_tokens or 0) / 1_000_000) * self.output
 
         total_input_cost = input_cost + cached_cost
         total_cost = total_input_cost + output_cost

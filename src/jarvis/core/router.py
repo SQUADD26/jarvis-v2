@@ -13,6 +13,12 @@ class SemanticRouter:
     # Example queries for each intent (used for embedding similarity)
     INTENT_EXAMPLES = {
         "calendar_read": [
+            "dammi gli eventi",
+            "eventi di lunedì",
+            "cosa ho lunedì",
+            "appuntamenti per lunedì",
+            "agenda della settimana",
+            "calendario di domani",
             "che impegni ho oggi",
             "mostrami il calendario",
             "cosa ho in agenda domani",
@@ -41,6 +47,12 @@ class SemanticRouter:
             "componi un'email"
         ],
         "web_search": [
+            "che tempo fa",
+            "meteo oggi",
+            "previsioni meteo",
+            "temperatura a",
+            "piove oggi",
+            "cerca su internet",
             "cerca informazioni su",
             "cosa sai di",
             "trova notizie su",
