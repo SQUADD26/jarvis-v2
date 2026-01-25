@@ -11,7 +11,12 @@ logger = get_logger(__name__)
 class Crawl4AIClient:
     """Client for Crawl4AI REST API service."""
 
-    def __init__(self, base_url: str = None, timeout: float = 60.0):
+    # Default settings
+    DEFAULT_TIMEOUT = 3600.0  # 1 hour for long documentation
+    DEFAULT_MAX_DEPTH = 3
+    DEFAULT_MAX_PAGES = 1000
+
+    def __init__(self, base_url: str = None, timeout: float = DEFAULT_TIMEOUT):
         settings = get_settings()
         self.base_url = (base_url or settings.crawl4ai_url).rstrip("/")
         self.timeout = timeout
@@ -30,8 +35,8 @@ class Crawl4AIClient:
         self,
         url: str,
         extract_markdown: bool = True,
-        max_depth: int = 1,
-        max_pages: int = 1
+        max_depth: int = DEFAULT_MAX_DEPTH,
+        max_pages: int = DEFAULT_MAX_PAGES
     ) -> dict:
         """
         Scrape a URL using Crawl4AI service.
