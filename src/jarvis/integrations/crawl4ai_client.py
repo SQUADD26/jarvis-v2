@@ -52,15 +52,18 @@ class Crawl4AIClient:
         Returns:
             dict with url, title, content, success, links
         """
+        # Build referer from URL base for sites that require it (e.g. GHL docs)
+        parsed = urlparse(url)
+        referer = f"{parsed.scheme}://{parsed.netloc}/docs/"
+
         payload = {
             "urls": [url],
             "crawler_config": {
                 "max_depth": max_depth,
                 "max_pages": max_pages,
-                "wait_until": "networkidle",  # Wait for all network requests
-                "page_timeout": 60000,  # 60 seconds for JS rendering
-                "wait_for": "css:article",  # Wait for article element (Docusaurus)
-                "wait_for_timeout": 30000  # 30s timeout for wait_for
+                "wait_until": "networkidle",
+                "page_timeout": 60000,
+                "headers": {"Referer": referer}
             },
             "extract_config": {
                 "mode": "markdown" if extract_markdown else "raw_html"
@@ -282,13 +285,16 @@ class Crawl4AIClient:
 
     async def _scrape_single_page(self, url: str) -> dict:
         """Scrape a single page without following links."""
+        # Build referer from URL base for sites that require it (e.g. GHL docs)
+        parsed = urlparse(url)
+        referer = f"{parsed.scheme}://{parsed.netloc}/docs/"
+
         payload = {
             "urls": [url],
             "crawler_config": {
-                "wait_until": "networkidle",  # Wait for all network requests
-                "page_timeout": 60000,  # 60 seconds for JS rendering
-                "wait_for": "css:article",  # Wait for article element (Docusaurus)
-                "wait_for_timeout": 30000  # 30s timeout for wait_for
+                "wait_until": "networkidle",
+                "page_timeout": 60000,
+                "headers": {"Referer": referer}
             },
             "extract_config": {
                 "mode": "markdown"
