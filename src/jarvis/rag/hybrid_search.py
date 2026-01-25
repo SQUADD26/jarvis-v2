@@ -2,7 +2,7 @@
 
 from jarvis.integrations.gemini import gemini
 from jarvis.integrations.reranker import reranker
-from jarvis.db.supabase import get_db
+from jarvis.db.supabase_client import get_db
 from jarvis.utils.logging import get_logger
 
 logger = get_logger(__name__)

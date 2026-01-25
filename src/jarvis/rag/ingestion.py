@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 from jarvis.rag.chunker import chunker, Chunk
 from jarvis.integrations.crawl4ai_client import crawler
 from jarvis.integrations.gemini import gemini
-from jarvis.db.supabase import get_db
+from jarvis.db.supabase_client import get_db
 from jarvis.utils.logging import get_logger
 
 logger = get_logger(__name__)

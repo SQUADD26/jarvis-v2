@@ -47,6 +47,13 @@ class Settings(BaseSettings):
     default_model: str = "gemini-2.0-flash"
     powerful_model: str = "gemini-2.5-pro-preview-05-06"
 
+    # Voice (local client)
+    porcupine_access_key: str = Field(default="", alias="PORCUPINE_ACCESS_KEY")
+    voice_sensitivity: float = Field(default=0.5, alias="VOICE_SENSITIVITY")
+    voice_silence_timeout: float = Field(default=2.0, alias="VOICE_SILENCE_TIMEOUT")
+    voice_max_recording: float = Field(default=30.0, alias="VOICE_MAX_RECORDING")
+    deepgram_tts_model: str = Field(default="aura-orion-en", alias="DEEPGRAM_TTS_MODEL")
+
     # Worker
     worker_id: str = Field(default="worker-1", alias="WORKER_ID")
     worker_poll_interval_active: float = 0.5   # Polling ogni 500ms quando attivo

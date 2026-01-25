@@ -40,6 +40,13 @@ dependencies = [
     "tenacity>=8.0.0",
     "numpy>=1.26.0",
     "dateparser>=1.2.0",
+
+    # Voice (local client)
+    "pvporcupine>=3.0.0",      # Wake word detection
+    "pyaudio>=0.2.14",         # Audio capture
+    "sounddevice>=0.4.6",      # Audio playback
+    "webrtcvad>=2.0.10",       # Voice activity detection
+    "setuptools>=70.0.0",      # For pkg_resources (webrtcvad dependency)
 ]
 
 [project.optional-dependencies]
