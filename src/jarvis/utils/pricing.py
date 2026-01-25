@@ -91,11 +91,19 @@ PERPLEXITY_PRICING = {
     "sonar-reasoning-pro": ModelPricing(input=2.0, output=8.0),
 }
 
+# Deepgram Pricing (per minute, converted to per 1M tokens equivalent)
+# Nova-3: $0.0043/min - we track actual cost in deepgram_stt.py
+DEEPGRAM_PRICING = {
+    "nova-3": ModelPricing(input=0.0, output=0.0),  # Cost tracked separately per minute
+    "nova-2": ModelPricing(input=0.0, output=0.0),
+}
+
 # Combined pricing lookup
 ALL_PRICING = {
     "gemini": GEMINI_PRICING,
     "openai": OPENAI_PRICING,
     "perplexity": PERPLEXITY_PRICING,
+    "deepgram": DEEPGRAM_PRICING,
 }
 
 

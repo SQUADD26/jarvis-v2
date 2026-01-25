@@ -57,12 +57,19 @@ class WhisperClient:
         )
         log_entry.start_timer()
 
+        # Context prompt to improve transcription accuracy
+        context_prompt = (
+            "Trascrizione di un messaggio vocale inviato a Jarvis, "
+            "un assistente AI personale. L'utente parla in italiano."
+        )
+
         try:
             with open(audio_path, "rb") as audio_file:
                 response = await self.client.audio.transcriptions.create(
                     model=self.model,
                     file=audio_file,
                     language=language,
+                    prompt=context_prompt,
                     response_format="text"
                 )
 

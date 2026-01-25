@@ -12,8 +12,11 @@ class Settings(BaseSettings):
     google_client_secret: str = Field(..., alias="GOOGLE_CLIENT_SECRET")
     google_refresh_token: str = Field(..., alias="GOOGLE_REFRESH_TOKEN")
 
-    # OpenAI (for Whisper)
+    # OpenAI (for Whisper - legacy)
     openai_api_key: str = Field(default="", alias="OPENAI_API_KEY")
+
+    # Deepgram (for Nova-3 STT)
+    deepgram_api_key: str = Field(default="", alias="DEEPGRAM_API_KEY")
 
     # Perplexity
     perplexity_api_key: str = Field(..., alias="PERPLEXITY_API_KEY")

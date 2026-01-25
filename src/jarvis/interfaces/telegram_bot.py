@@ -22,7 +22,7 @@ from jarvis.core.router import router
 from jarvis.core.freshness import freshness
 from jarvis.core.memory import memory
 from jarvis.db.repositories import ChatRepository, TaskRepository, LLMLogsRepository
-from jarvis.integrations.openai_whisper import whisper
+from jarvis.integrations.deepgram_stt import deepgram
 from jarvis.utils.logging import get_logger
 from langchain_core.messages import HumanMessage, AIMessage
 from dateparser import parse as parse_date
@@ -387,9 +387,9 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             ext = ".ogg"
 
-        # Transcribe with Whisper
-        whisper.set_user_context(user_id_str)
-        transcribed_text = await whisper.transcribe_bytes(
+        # Transcribe with Deepgram Nova-3
+        deepgram.set_user_context(user_id_str)
+        transcribed_text = await deepgram.transcribe_bytes(
             bytes(audio_data),
             filename=f"voice{ext}",
             language="it",
