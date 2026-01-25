@@ -1,6 +1,5 @@
 import asyncio
 import random
-from collections import OrderedDict
 from telegram import Update
 from telegram.ext import (
     Application,
@@ -21,6 +20,7 @@ from jarvis.core.orchestrator import process_message
 from jarvis.core.freshness import freshness
 from jarvis.core.memory import memory
 from jarvis.db.repositories import ChatRepository, TaskRepository, LLMLogsRepository
+from jarvis.db.redis_client import redis_client
 from jarvis.integrations.deepgram_stt import deepgram
 from jarvis.utils.logging import get_logger
 from langchain_core.messages import HumanMessage, AIMessage
@@ -29,53 +29,70 @@ from dateparser import parse as parse_date
 logger = get_logger(__name__)
 settings = get_settings()
 
-# LRU cache for conversation history with bounded size
-MAX_CACHED_USERS = 100  # Maximum users to keep in memory
-MAX_HISTORY_PER_USER = 20  # Maximum messages per user
+# Conversation history settings
+MAX_TURNS = 15  # 15 exchanges = 30 messages (human + AI)
+CONVERSATION_TTL = 48 * 60 * 60  # 48 hours in seconds
 
 
-class ConversationCache:
-    """LRU cache for conversation history with bounded memory usage."""
+class RedisConversationCache:
+    """Redis-backed conversation history with TTL."""
 
-    def __init__(self, max_users: int = MAX_CACHED_USERS, max_history: int = MAX_HISTORY_PER_USER):
-        self._cache: OrderedDict[int, list] = OrderedDict()
-        self._max_users = max_users
-        self._max_history = max_history
+    def __init__(self, max_turns: int = MAX_TURNS, ttl: int = CONVERSATION_TTL):
+        self._max_turns = max_turns
+        self._ttl = ttl
+        self._key_prefix = "jarvis:chat:"
 
-    def get(self, user_id: int) -> list:
-        """Get conversation history for user, moving to end (most recently used)."""
-        if user_id in self._cache:
-            self._cache.move_to_end(user_id)
-            return self._cache[user_id]
+    def _key(self, user_id: int) -> str:
+        return f"{self._key_prefix}{user_id}"
+
+    async def get(self, user_id: int) -> list:
+        """Get conversation history for user from Redis."""
+        try:
+            data = await redis_client.get(self._key(user_id))
+            if data:
+                # Reconstruct message objects from stored data
+                messages = []
+                for msg in data:
+                    if msg["type"] == "human":
+                        messages.append(HumanMessage(content=msg["content"]))
+                    else:
+                        messages.append(AIMessage(content=msg["content"]))
+                return messages
+        except Exception as e:
+            logger.error(f"Redis get conversation failed: {e}")
         return []
 
-    def update(self, user_id: int, user_message: str, assistant_response: str):
-        """Update conversation history for user."""
-        if user_id not in self._cache:
-            self._cache[user_id] = []
+    async def update(self, user_id: int, user_message: str, assistant_response: str):
+        """Update conversation history in Redis."""
+        try:
+            # Get existing history
+            data = await redis_client.get(self._key(user_id)) or []
 
-        self._cache[user_id].append(HumanMessage(content=user_message))
-        self._cache[user_id].append(AIMessage(content=assistant_response))
+            # Add new messages
+            data.append({"type": "human", "content": user_message})
+            data.append({"type": "ai", "content": assistant_response})
 
-        # Trim history if too long
-        if len(self._cache[user_id]) > self._max_history * 2:
-            self._cache[user_id] = self._cache[user_id][-self._max_history * 2:]
+            # Trim to max turns (each turn = 2 messages)
+            max_messages = self._max_turns * 2
+            if len(data) > max_messages:
+                data = data[-max_messages:]
 
-        # Move to end (most recently used)
-        self._cache.move_to_end(user_id)
+            # Save with TTL
+            await redis_client.set(self._key(user_id), data, self._ttl)
 
-        # Evict oldest users if cache is full
-        while len(self._cache) > self._max_users:
-            self._cache.popitem(last=False)
+        except Exception as e:
+            logger.error(f"Redis update conversation failed: {e}")
 
-    def clear(self, user_id: int):
+    async def clear(self, user_id: int):
         """Clear conversation history for user."""
-        if user_id in self._cache:
-            del self._cache[user_id]
+        try:
+            await redis_client.delete(self._key(user_id))
+        except Exception as e:
+            logger.error(f"Redis clear conversation failed: {e}")
 
 
 # Singleton conversation cache
-conversation_cache = ConversationCache()
+conversation_cache = RedisConversationCache()
 
 
 def is_authorized(user_id: int) -> bool:
@@ -172,7 +189,7 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_authorized(user_id):
         return
 
-    conversation_cache.clear(user_id)
+    await conversation_cache.clear(user_id)
     await update.message.reply_text("Cronologia conversazione cancellata!")
 
 
@@ -403,11 +420,11 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await ack_message.edit_text(f"JARVIS sta pensando...\n\n(Hai detto: \"{transcribed_text[:100]}{'...' if len(transcribed_text) > 100 else ''}\")")
 
         # Process the transcribed text as a normal message
-        history = conversation_cache.get(user_id)
+        history = await conversation_cache.get(user_id)
         response = await process_message(user_id_str, transcribed_text, history.copy())
 
         # Update cache
-        conversation_cache.update(user_id, transcribed_text, response)
+        await conversation_cache.update(user_id, transcribed_text, response)
 
         # Delete ack and send response
         try:
@@ -450,13 +467,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Get conversation history from cache
-        history = conversation_cache.get(user_id)
+        history = await conversation_cache.get(user_id)
 
         # Process message with Jarvis
         response = await process_message(user_id_str, message, history.copy())
 
         # Update cache with new messages
-        conversation_cache.update(user_id, message, response)
+        await conversation_cache.update(user_id, message, response)
 
         # Delete the acknowledgment message and send the real response
         try:
