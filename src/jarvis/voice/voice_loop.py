@@ -56,10 +56,6 @@ class VoiceClient:
         logger.info("Starting voice client...")
 
         # Validate configuration
-        if not self._settings.porcupine_access_key:
-            logger.error("PORCUPINE_ACCESS_KEY not set. Get free key at https://console.picovoice.ai")
-            return
-
         if not self._settings.deepgram_api_key:
             logger.error("DEEPGRAM_API_KEY not set")
             return
@@ -75,7 +71,7 @@ class VoiceClient:
             return
 
         self._running = True
-        logger.info("Voice client ready. Say 'Jarvis' to activate.")
+        logger.info("Voice client ready. Say 'Hey Jarvis' to activate.")
 
         try:
             await self._main_loop()

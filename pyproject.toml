@@ -42,7 +42,7 @@ dependencies = [
     "dateparser>=1.2.0",
 
     # Voice (local client)
-    "pvporcupine>=3.0.0",      # Wake word detection
+    "openwakeword>=0.6.0",     # Wake word detection (free, no API key)
     "pyaudio>=0.2.14",         # Audio capture
     "sounddevice>=0.4.6",      # Audio playback
     "webrtcvad>=2.0.10",       # Voice activity detection

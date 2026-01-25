@@ -23,7 +23,7 @@ RAG_TOOLS = [
         "description": "Importa e indicizza una pagina web nella knowledge base. Usa quando l'utente vuole salvare/memorizzare un URL.",
         "parameters": {
             "url": "L'URL da importare",
-            "doc_type": "Tipo documento: webpage, article, documentation (default: webpage)"
+            "title": "Titolo opzionale del documento (se non fornito, viene estratto dalla pagina)"
         }
     },
     {
@@ -57,7 +57,7 @@ REGOLE:
 
 ESEMPI:
 - "cerca info sul progetto Alpha" → {{"tool": "search_knowledge", "params": {{"query": "progetto Alpha"}}}}
-- "salva questa pagina https://..." → {{"tool": "ingest_url", "params": {{"url": "https://...", "doc_type": "webpage"}}}}
+- "salva questa pagina https://..." → {{"tool": "ingest_url", "params": {{"url": "https://..."}}}}
 - "memorizza questa nota: ..." → {{"tool": "ingest_text", "params": {{"text": "...", "title": "Nota"}}}}
 - "che documenti ho" → {{"tool": "list_documents", "params": {{"limit": 10}}}}
 
@@ -147,7 +147,7 @@ class RAGAgent(BaseAgent):
         """Ingest a URL into the knowledge base."""
         try:
             url = params.get("url", "")
-            doc_type = params.get("doc_type", "webpage")
+            title = params.get("title")
 
             if not url:
                 return {"error": "URL mancante"}
@@ -155,7 +155,7 @@ class RAGAgent(BaseAgent):
             result = await ingestion_pipeline.ingest_url(
                 url=url,
                 user_id=user_id,
-                doc_type=doc_type
+                title=title
             )
 
             if result["success"]:
@@ -187,7 +187,7 @@ class RAGAgent(BaseAgent):
                 text=text,
                 user_id=user_id,
                 title=title,
-                doc_type="note"
+                source_type="note"
             )
 
             if result["success"]:
