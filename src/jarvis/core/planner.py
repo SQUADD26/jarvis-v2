@@ -20,11 +20,12 @@ AGENTI DISPONIBILI:
 {agent_descriptions}
 
 REGOLE:
-1. Analizza cosa l'utente sta chiedendo
+1. Analizza cosa l'utente sta chiedendo, CONSIDERANDO IL CONTESTO della conversazione recente
 2. Seleziona SOLO gli agenti necessari (può essere 0, 1, o più)
 3. Se la richiesta è semplice conversazione (saluti, ringraziamenti, domande generiche su di te), non servono agenti
 4. Se l'utente chiede qualcosa che richiede dati esterni (calendario, email, web), seleziona gli agenti appropriati
 5. In caso di dubbio su calendario/email, è meglio includere l'agente che escluderlo
+6. Se l'utente fa riferimento a qualcosa detto prima (es. "riprova", "fallo di nuovo", "continua"), USA IL CONTESTO per capire cosa intende
 
 ESEMPI:
 - "ciao come stai" → agents: []
@@ -35,11 +36,14 @@ ESEMPI:
 - "che tempo fa a Milano" → agents: ["web"]
 - "cerca nei miei documenti" → agents: ["rag"]
 - "grazie mille" → agents: []
+- "riprova" (dopo richiesta di ingestione URL) → agents: ["rag"]
+- "fallo" (dopo richiesta di creare evento) → agents: ["calendar"]
 
 Rispondi SOLO con un JSON valido:
 {{"agents": ["agent1", "agent2"], "reasoning": "breve spiegazione"}}
 
-RICHIESTA UTENTE:
+{conversation_context}
+RICHIESTA UTENTE ATTUALE:
 {user_input}
 
 JSON:"""
@@ -51,13 +55,14 @@ class Planner:
     def __init__(self):
         self.model = "gemini-2.5-flash"
 
-    async def plan(self, user_input: str, user_id: str = None) -> list[str]:
+    async def plan(self, user_input: str, user_id: str = None, history: list = None) -> list[str]:
         """
         Analyze user input and determine which agents are needed.
 
         Args:
             user_input: The user's message
             user_id: User ID for logging
+            history: Conversation history (list of HumanMessage/AIMessage)
 
         Returns:
             List of agent names to execute
@@ -67,9 +72,21 @@ class Planner:
             f"- {name}: {desc}" for name, desc in AGENT_CAPABILITIES.items()
         ])
 
+        # Format conversation context (last 4 messages for context)
+        conversation_context = ""
+        if history and len(history) > 0:
+            recent = history[-4:]  # Last 2 exchanges
+            context_lines = ["CONTESTO CONVERSAZIONE RECENTE:"]
+            for msg in recent:
+                role = "Utente" if msg.__class__.__name__ == "HumanMessage" else "Assistente"
+                content = msg.content[:200] + "..." if len(msg.content) > 200 else msg.content
+                context_lines.append(f"{role}: {content}")
+            conversation_context = "\n".join(context_lines) + "\n\n"
+
         prompt = PLANNER_PROMPT.format(
             agent_descriptions=agent_descriptions,
-            user_input=user_input
+            user_input=user_input,
+            conversation_context=conversation_context
         )
 
         try:

@@ -64,9 +64,13 @@ async def analyze_intent(state: JarvisState) -> JarvisState:
     """Analyze user intent and determine required agents using LLM planner."""
     user_input = state["current_input"]
     user_id = state["user_id"]
+    messages = state.get("messages", [])
+
+    # Pass conversation history to planner for context (exclude current message)
+    history = messages[:-1] if len(messages) > 1 else []
 
     # Always use planner - reliable and fast (Gemini 2.5 Flash)
-    required_agents = await planner.plan(user_input, user_id)
+    required_agents = await planner.plan(user_input, user_id, history=history)
 
     # Determine intent based on agents
     if required_agents:
@@ -172,11 +176,16 @@ async def generate_response(state: JarvisState) -> JarvisState:
     memory_facts = state["memory_context"]
     messages = state["messages"]
 
-    # For chitchat, simple response
+    # For chitchat, use history for context
     if intent == "chitchat":
-        response = await gemini.generate(
-            state["current_input"],
-            system_instruction="Sei JARVIS, assistente personale. Rispondi in italiano, tono cordiale e naturale. Puoi usare 'Boss' o 'Capo' occasionalmente. Breve e diretto, niente risposte robotiche tipo 'Sono operativo'. NON scrivere codice.",
+        # Convert messages to list format for history-aware response
+        msg_list = [
+            {"role": "user" if isinstance(m, HumanMessage) else "assistant", "content": m.content}
+            for m in messages
+        ]
+        response = await gemini.generate_with_history(
+            messages=msg_list,
+            system_instruction="Sei JARVIS, assistente personale. Rispondi in italiano, tono cordiale e naturale. Puoi usare 'Boss' o 'Capo' occasionalmente. Breve e diretto, niente risposte robotiche tipo 'Sono operativo'. NON scrivere codice. USA IL CONTESTO della conversazione per capire riferimenti vaghi.",
             model="gemini-2.5-flash",
             temperature=0.6
         )
