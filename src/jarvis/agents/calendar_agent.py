@@ -204,7 +204,7 @@ Risposta (read/write):"""
             "lunedì": 0, "lunedi": 0,
             "martedì": 1, "martedi": 1,
             "mercoledì": 2, "mercoledi": 2,
-            "giovedì": 3, "giovedi": 3, "jueves": 3,
+            "giovedì": 3, "giovedi": 3,
             "venerdì": 4, "venerdi": 4,
             "sabato": 5,
             "domenica": 6
