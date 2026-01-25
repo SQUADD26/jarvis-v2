@@ -85,17 +85,29 @@ class RAGAgent(BaseAgent):
         user_input = state["current_input"]
         user_id = state["user_id"]
 
+        self.logger.info(f"RAG agent starting with input: {user_input[:100]}...")
+
         # Format tools for prompt
         tools_str = json.dumps(RAG_TOOLS, indent=2, ensure_ascii=False)
         prompt = AGENT_SYSTEM_PROMPT.format(tools=tools_str)
 
         # Ask LLM what to do
-        response = await gemini.generate(
-            user_input,
-            system_instruction=prompt,
-            model="gemini-2.5-flash",
-            temperature=0.1
-        )
+        try:
+            self.logger.debug("Calling Gemini for RAG decision...")
+            response = await gemini.generate(
+                user_input,
+                system_instruction=prompt,
+                model="gemini-2.5-flash",
+                temperature=0.1
+            )
+            self.logger.debug(f"Gemini raw response: {response[:300] if response else 'EMPTY'}")
+        except Exception as e:
+            self.logger.error(f"Gemini call failed: {e}")
+            return {"error": f"Errore LLM: {str(e)}"}
+
+        if not response:
+            self.logger.error("Gemini returned empty response")
+            return {"error": "LLM non ha risposto"}
 
         # Parse LLM response
         try:
