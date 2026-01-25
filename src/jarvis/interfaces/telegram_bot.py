@@ -22,6 +22,7 @@ from jarvis.core.router import router
 from jarvis.core.freshness import freshness
 from jarvis.core.memory import memory
 from jarvis.db.repositories import ChatRepository, TaskRepository, LLMLogsRepository
+from jarvis.integrations.openai_whisper import whisper
 from jarvis.utils.logging import get_logger
 from langchain_core.messages import HumanMessage, AIMessage
 from dateparser import parse as parse_date
@@ -345,8 +346,91 @@ async def costs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Errore nel recuperare i costi.")
 
 
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle incoming voice messages."""
+    user_id = update.effective_user.id
+    user_id_str = str(user_id)
+
+    if not is_authorized(user_id):
+        return
+
+    # Send acknowledgment
+    ack_message = await update.message.reply_text("Sto trascrivendo il tuo messaggio vocale...")
+
+    # Show typing indicator
+    await context.bot.send_chat_action(
+        chat_id=update.effective_chat.id,
+        action=ChatAction.TYPING
+    )
+
+    try:
+        # Get the voice message file
+        voice = update.message.voice or update.message.audio
+        if not voice:
+            await ack_message.edit_text("Non riesco a trovare il file audio.")
+            return
+
+        # Download the file
+        file = await context.bot.get_file(voice.file_id)
+        audio_data = await file.download_as_bytearray()
+
+        # Determine file extension
+        if voice.mime_type:
+            ext_map = {
+                "audio/ogg": ".ogg",
+                "audio/mpeg": ".mp3",
+                "audio/mp4": ".m4a",
+                "audio/wav": ".wav",
+                "audio/webm": ".webm",
+            }
+            ext = ext_map.get(voice.mime_type, ".ogg")
+        else:
+            ext = ".ogg"
+
+        # Transcribe with Whisper
+        whisper.set_user_context(user_id_str)
+        transcribed_text = await whisper.transcribe_bytes(
+            bytes(audio_data),
+            filename=f"voice{ext}",
+            language="it",
+            user_id=user_id_str
+        )
+
+        if not transcribed_text or not transcribed_text.strip():
+            await ack_message.edit_text("Non sono riuscito a trascrivere il messaggio vocale.")
+            return
+
+        # Update ack message with transcription
+        await ack_message.edit_text(f"JARVIS sta pensando...\n\n(Hai detto: \"{transcribed_text[:100]}{'...' if len(transcribed_text) > 100 else ''}\")")
+
+        # Process the transcribed text as a normal message
+        history = conversation_cache.get(user_id)
+        response = await process_message(user_id_str, transcribed_text, history.copy())
+
+        # Update cache
+        conversation_cache.update(user_id, transcribed_text, response)
+
+        # Delete ack and send response
+        try:
+            await ack_message.delete()
+        except Exception:
+            pass
+
+        await update.message.reply_text(response)
+
+    except Exception as e:
+        logger.error(f"Error processing voice message: {e}", exc_info=True)
+        try:
+            await ack_message.delete()
+        except Exception:
+            pass
+        await update.message.reply_text(
+            "Mi dispiace, c'è stato un errore nel processare il messaggio vocale. Riprova."
+        )
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle incoming messages."""
+    """Handle incoming text messages."""
     user_id = update.effective_user.id
     user_id_str = str(user_id)
 
@@ -410,6 +494,7 @@ def create_bot() -> Application:
     app.add_handler(CommandHandler("costs", costs_command))
     app.add_handler(CommandHandler("clear", clear_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
 
     return app
 
