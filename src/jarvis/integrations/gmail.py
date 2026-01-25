@@ -180,6 +180,34 @@ class GmailClient:
 
         return {"id": result["id"], "status": "sent"}
 
+    def create_draft(
+        self,
+        to: str = "",
+        subject: str = "",
+        body: str = "",
+        cc: str = None,
+        bcc: str = None
+    ) -> dict:
+        """Create an email draft."""
+        message = MIMEText(body)
+        if to:
+            message["to"] = to
+        message["subject"] = subject
+
+        if cc:
+            message["cc"] = cc
+        if bcc:
+            message["bcc"] = bcc
+
+        raw = base64.urlsafe_b64encode(message.as_bytes()).decode()
+
+        result = self.service.users().drafts().create(
+            userId="me",
+            body={"message": {"raw": raw}}
+        ).execute()
+
+        return {"id": result["id"], "message_id": result["message"]["id"], "status": "draft_created"}
+
     def search_emails(self, query: str, max_results: int = 20) -> list[dict]:
         """Search emails with Gmail query syntax."""
         return self.get_inbox(max_results=max_results, query=query)

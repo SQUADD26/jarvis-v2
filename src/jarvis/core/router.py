@@ -23,28 +23,57 @@ class SemanticRouter:
             "mostrami il calendario",
             "cosa ho in agenda domani",
             "quali sono i miei appuntamenti",
-            "ho riunioni questa settimana"
+            "ho riunioni questa settimana",
+            "mi passi l'agenda",
+            "passami l'agenda di domani",
+            "fammi vedere l'agenda",
+            "agenda di lunedì mattina",
+            "che ho in programma",
+            "impegni di questa settimana",
+            "riunioni di oggi",
+            "meeting di domani",
+            "quando ho la prossima riunione",
+            "sono libero domani",
+            "ho impegni venerdì"
         ],
         "calendar_write": [
             "crea un evento",
             "aggiungi un appuntamento",
             "schedula una riunione",
             "sposta l'evento",
-            "cancella l'appuntamento"
+            "cancella l'appuntamento",
+            "fissa un appuntamento",
+            "metti in agenda",
+            "prenota una riunione",
+            "organizza un meeting",
+            "inserisci nel calendario"
         ],
         "email_read": [
             "controlla le email",
             "ho messaggi nuovi",
             "mostrami la posta",
             "leggi le email",
-            "ci sono email importanti"
+            "ci sono email importanti",
+            "email ricevute oggi",
+            "posta in arrivo",
+            "messaggi non letti",
+            "chi mi ha scritto"
         ],
         "email_write": [
             "scrivi una email",
             "manda un messaggio a",
             "rispondi all'email",
             "invia una mail",
-            "componi un'email"
+            "componi un'email",
+            "crea una bozza email",
+            "bozza di mail",
+            "prepara una email",
+            "scrivi a",
+            "manda una mail a",
+            "email a",
+            "drafta una mail",
+            "fai una bozza",
+            "scrivi una mail di prova"
         ],
         "web_search": [
             "che tempo fa",
