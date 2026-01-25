@@ -18,7 +18,6 @@ ACKNOWLEDGMENT_MESSAGES = [
 
 from jarvis.config import get_settings
 from jarvis.core.orchestrator import process_message
-from jarvis.core.router import router
 from jarvis.core.freshness import freshness
 from jarvis.core.memory import memory
 from jarvis.db.repositories import ChatRepository, TaskRepository, LLMLogsRepository
@@ -501,9 +500,6 @@ def create_bot() -> Application:
 
 async def run_bot():
     """Run the Telegram bot."""
-    # Initialize router
-    await router.initialize()
-
     # Create and run bot
     app = create_bot()
 

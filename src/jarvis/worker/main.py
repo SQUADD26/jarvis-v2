@@ -8,7 +8,6 @@ from jarvis.config import get_settings
 from jarvis.db.repositories import TaskRepository
 from jarvis.worker.executor import executor
 from jarvis.worker.notifier import notifier
-from jarvis.core.router import router
 from jarvis.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -30,10 +29,6 @@ class Worker:
     async def start(self):
         """Start the worker loop."""
         logger.info(f"Worker {self.worker_id} starting...")
-
-        # Initialize router for semantic intent detection
-        await router.initialize()
-
         self._running = True
 
         # Set up signal handlers

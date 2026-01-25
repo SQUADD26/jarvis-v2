@@ -47,7 +47,31 @@ class EmailAgent(BaseAgent):
         elif intent == "email_write":
             return await self._handle_write(user_input, state)
         else:
-            return await self._handle_read(user_input)
+            # Classify with LLM
+            return await self._handle_complex(user_input, state)
+
+    async def _handle_complex(self, query: str, state: JarvisState) -> dict:
+        """Handle complex email queries - determine if read or write."""
+        classification_prompt = f"""Classifica questa richiesta email.
+Rispondi SOLO con "read" o "write".
+
+- read: controllare email, leggere messaggi, cercare email
+- write: scrivere email, creare bozza, rispondere, inviare
+
+Richiesta: {query}
+
+Risposta (read/write):"""
+
+        try:
+            response = await gemini.generate(classification_prompt, temperature=0.1)
+            operation = response.strip().lower()
+
+            if "write" in operation:
+                return await self._handle_write(query, state)
+            else:
+                return await self._handle_read(query)
+        except Exception:
+            return await self._handle_read(query)
 
     async def _handle_read(self, query: str) -> dict:
         """Handle email read operations."""

@@ -3,8 +3,7 @@ from typing import Literal
 from langgraph.graph import StateGraph, END
 from langchain_core.messages import HumanMessage, AIMessage
 
-from jarvis.core.state import JarvisState, INTENT_CATEGORIES
-from jarvis.core.router import router
+from jarvis.core.state import JarvisState
 from jarvis.core.planner import planner
 from jarvis.core.memory import memory
 from jarvis.core.freshness import freshness
@@ -62,47 +61,25 @@ DATI DAGLI AGENTI:
 
 
 async def analyze_intent(state: JarvisState) -> JarvisState:
-    """Analyze user intent and determine required agents."""
+    """Analyze user intent and determine required agents using LLM planner."""
     user_input = state["current_input"]
     user_id = state["user_id"]
 
-    # Use semantic router first (fast, no LLM call)
-    intent, confidence = await router.route(user_input)
+    # Always use planner - reliable and fast (Gemini 2.5 Flash)
+    required_agents = await planner.plan(user_input, user_id)
 
-    # Get required agents from router
-    required_agents = router.get_required_agents(intent)
+    # Determine intent based on agents
+    if required_agents:
+        intent = "action"
+    else:
+        intent = "chitchat"
 
-    # Keywords that should NEVER be chitchat
-    action_keywords = ["eventi", "agenda", "calendario", "email", "mail", "cerca", "meteo", "riunion", "appuntament", "impegn"]
-    has_action_keyword = any(kw in user_input.lower() for kw in action_keywords)
-
-    # Use planner if:
-    # 1. Intent is complex/unknown
-    # 2. Confidence is below threshold
-    # 3. Classified as chitchat but contains action keywords (router mistake)
-    needs_planner = (
-        intent in ("complex", "unknown") or
-        confidence < 0.80 or
-        (intent == "chitchat" and has_action_keyword)
-    )
-
-    if needs_planner:
-        logger.info(f"Router uncertain or override (intent={intent}, conf={confidence:.2f}, action_kw={has_action_keyword}), using planner...")
-        planned_agents = await planner.plan(user_input, user_id)
-
-        if planned_agents:
-            required_agents = planned_agents
-            intent = "planned"
-        elif not has_action_keyword:
-            # Only treat as chitchat if no action keywords
-            intent = "chitchat"
-
-    logger.info(f"Intent: {intent} (confidence={confidence:.2f}), agents: {required_agents}")
+    logger.info(f"Planner: intent={intent}, agents={required_agents}")
 
     return {
         **state,
         "intent": intent,
-        "intent_confidence": confidence,
+        "intent_confidence": 1.0,  # Planner is always confident
         "required_agents": required_agents
     }
 
