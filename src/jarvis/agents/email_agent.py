@@ -102,8 +102,8 @@ Rispondi SOLO in JSON con:
 - reply_to_id: ID email a cui rispondere (se reply)
 - tone: "formal", "casual", "professional"
 
-Se l'utente non ha specificato il contenuto, imposta body a null.
 Se l'utente chiede di creare una "bozza", "draft", "prova", o "esempio", usa action="draft".
+Se l'utente dice "test", "prova", "irrilevante", o simili senza specificare contenuto, genera un body placeholder come "Questo è un messaggio di test." e subject "Test".
 
 <user_input>
 {query}
@@ -126,13 +126,21 @@ JSON:"""
 
         action = details.get("action", "send")
 
-        # If body is not provided, we need to compose it
+        # If body is not provided, check if it's a test/draft request
         if not details.get("body"):
-            return {
-                "operation": "needs_content",
-                "details": details,
-                "message": "Cosa vuoi scrivere nell'email?"
-            }
+            query_lower = query.lower()
+            is_test_request = any(word in query_lower for word in ["test", "prova", "esempio", "irrilevante", "qualsiasi", "placeholder"])
+
+            if action == "draft" and is_test_request:
+                # Auto-generate placeholder content for test drafts
+                details["body"] = "Questo è un messaggio di test generato automaticamente."
+                details["subject"] = details.get("subject") or "Test"
+            else:
+                return {
+                    "operation": "needs_content",
+                    "details": details,
+                    "message": "Cosa vuoi scrivere nell'email?"
+                }
 
         if action == "send":
             if not details.get("to"):
