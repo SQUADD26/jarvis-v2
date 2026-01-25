@@ -1,4 +1,5 @@
 import asyncio
+import random
 from collections import OrderedDict
 from telegram import Update
 from telegram.ext import (
@@ -9,6 +10,30 @@ from telegram.ext import (
     filters
 )
 from telegram.constants import ChatAction
+
+# Varied acknowledgment messages for natural interaction
+ACKNOWLEDGMENT_MESSAGES = [
+    "Certamente, solo un attimo... ⏳",
+    "Un momento, ci penso subito... 🤔",
+    "Dammi un secondo... ⏳",
+    "Ci sono, fammi controllare... 👀",
+    "Subito, un attimo di pazienza... ⏳",
+    "Ok, verifico immediatamente... 🔍",
+    "Sì, dammi un istante... ⏳",
+    "Perfetto, controllo subito... ✨",
+    "Un secondo che verifico... 🔎",
+    "Certo, fammi dare un'occhiata... 👁️",
+    "Arrivo, solo un momento... ⏳",
+    "Ci sono sopra, un attimo... 💭",
+    "Ok, mi metto subito al lavoro... ⚡",
+    "Capito, dammi un secondo... ⏳",
+    "Sì sì, controllo subito... 🎯",
+    "Un momento che ci guardo... 👀",
+    "Perfetto, fammi vedere... 🔍",
+    "D'accordo, un istante... ⏳",
+    "Ricevuto, ci penso io... 💡",
+    "Aspetta un attimo che controllo... ⏳",
+]
 
 from jarvis.config import get_settings
 from jarvis.core.orchestrator import process_message
@@ -176,7 +201,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     message = update.message.text
 
-    # Show typing indicator
+    # Send immediate acknowledgment (random variation)
+    ack_text = random.choice(ACKNOWLEDGMENT_MESSAGES)
+    ack_message = await update.message.reply_text(ack_text)
+
+    # Show typing indicator while processing
     await context.bot.send_chat_action(
         chat_id=update.effective_chat.id,
         action=ChatAction.TYPING
@@ -192,11 +221,22 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Update cache with new messages
         conversation_cache.update(user_id, message, response)
 
+        # Delete the acknowledgment message and send the real response
+        try:
+            await ack_message.delete()
+        except Exception:
+            pass  # Ignore if we can't delete (e.g., message too old)
+
         # Send response
         await update.message.reply_text(response)
 
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)
+        # Try to delete ack message on error too
+        try:
+            await ack_message.delete()
+        except Exception:
+            pass
         await update.message.reply_text(
             "Mi dispiace, c'è stato un errore. Riprova tra poco."
         )
