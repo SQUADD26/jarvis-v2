@@ -84,19 +84,33 @@ class RAGAgent(BaseAgent):
         """Execute RAG operations using LLM reasoning."""
         user_input = state["current_input"]
         user_id = state["user_id"]
+        messages = state.get("messages", [])
 
         self.logger.info(f"RAG agent starting with input: {user_input[:100]}...")
 
         # Format tools for prompt
         tools_str = json.dumps(RAG_TOOLS, indent=2, ensure_ascii=False)
-        prompt = AGENT_SYSTEM_PROMPT.format(tools=tools_str)
+
+        # Build conversation context (last 4 messages for context)
+        conversation_context = ""
+        if messages and len(messages) > 1:
+            recent = messages[-5:-1]  # Exclude current message, get last 4
+            if recent:
+                context_lines = ["CONTESTO CONVERSAZIONE:"]
+                for msg in recent:
+                    role = "Utente" if msg.__class__.__name__ == "HumanMessage" else "Assistente"
+                    content = msg.content[:300] + "..." if len(msg.content) > 300 else msg.content
+                    context_lines.append(f"{role}: {content}")
+                conversation_context = "\n".join(context_lines) + "\n\n"
+
+        prompt = AGENT_SYSTEM_PROMPT.format(tools=tools_str) + "\n\n" + conversation_context + f"RICHIESTA ATTUALE:\n{user_input}"
 
         # Ask LLM what to do
         try:
             self.logger.debug("Calling Gemini for RAG decision...")
             response = await gemini.generate(
-                user_input,
-                system_instruction=prompt,
+                prompt,
+                system_instruction="Rispondi SOLO con JSON valido. Usa il contesto della conversazione per capire riferimenti vaghi.",
                 model="gemini-2.5-flash",
                 temperature=0.1
             )
