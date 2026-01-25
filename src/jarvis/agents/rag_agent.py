@@ -20,10 +20,19 @@ RAG_TOOLS = [
     },
     {
         "name": "ingest_url",
-        "description": "Importa e indicizza una pagina web nella knowledge base. Usa quando l'utente vuole salvare/memorizzare un URL.",
+        "description": "Importa e indicizza una singola pagina web. Usa per pagine singole.",
         "parameters": {
             "url": "L'URL da importare",
-            "title": "Titolo opzionale del documento (se non fornito, viene estratto dalla pagina)"
+            "title": "Titolo opzionale"
+        }
+    },
+    {
+        "name": "ingest_documentation",
+        "description": "Importa una documentazione completa seguendo i link interni (deep crawling). Usa quando l'utente vuole salvare documentazione, guide multi-pagina, wiki, o siti con più pagine collegate.",
+        "parameters": {
+            "url": "L'URL iniziale della documentazione",
+            "title": "Titolo della collezione",
+            "max_pages": "Numero massimo di pagine da importare (default: 50)"
         }
     },
     {
@@ -49,15 +58,18 @@ TOOL DISPONIBILI:
 {tools}
 
 REGOLE:
-1. Per cercare informazioni → usa search_knowledge (ricerca ibrida semantica + keyword)
-2. Per salvare una pagina web → usa ingest_url
-3. Per salvare testo/note → usa ingest_text
-4. Per vedere documenti disponibili → usa list_documents
-5. Rispondi SOLO con JSON: {{"tool": "nome_tool", "params": {{...}}}}
+1. Per cercare informazioni → usa search_knowledge
+2. Per salvare una SINGOLA pagina web → usa ingest_url
+3. Per salvare DOCUMENTAZIONE MULTI-PAGINA (docs, guide, wiki) → usa ingest_documentation
+4. Per salvare testo/note → usa ingest_text
+5. Per vedere documenti disponibili → usa list_documents
+6. Rispondi SOLO con JSON: {{"tool": "nome_tool", "params": {{...}}}}
 
 ESEMPI:
 - "cerca info sul progetto Alpha" → {{"tool": "search_knowledge", "params": {{"query": "progetto Alpha"}}}}
 - "salva questa pagina https://..." → {{"tool": "ingest_url", "params": {{"url": "https://..."}}}}
+- "importa la documentazione di https://docs.example.com" → {{"tool": "ingest_documentation", "params": {{"url": "https://docs.example.com", "title": "Example Docs", "max_pages": 50}}}}
+- "ingerisci questo sito https://wiki.example.com" → {{"tool": "ingest_documentation", "params": {{"url": "https://wiki.example.com", "title": "Wiki", "max_pages": 50}}}}
 - "memorizza questa nota: ..." → {{"tool": "ingest_text", "params": {{"text": "...", "title": "Nota"}}}}
 - "che documenti ho" → {{"tool": "list_documents", "params": {{"limit": 10}}}}
 
@@ -114,6 +126,8 @@ class RAGAgent(BaseAgent):
             return await self._tool_search(params, user_id)
         elif tool_name == "ingest_url":
             return await self._tool_ingest_url(params, user_id)
+        elif tool_name == "ingest_documentation":
+            return await self._tool_ingest_documentation(params, user_id)
         elif tool_name == "ingest_text":
             return await self._tool_ingest_text(params, user_id)
         elif tool_name == "list_documents":
@@ -172,6 +186,43 @@ class RAGAgent(BaseAgent):
 
         except Exception as e:
             self.logger.error(f"ingest_url failed: {e}")
+            return {"error": f"Errore nell'importazione: {str(e)}"}
+
+    async def _tool_ingest_documentation(self, params: dict, user_id: str) -> dict:
+        """Deep crawl and ingest documentation (multi-page)."""
+        try:
+            url = params.get("url", "")
+            title = params.get("title")
+            max_pages = params.get("max_pages", 50)
+
+            if not url:
+                return {"error": "URL mancante"}
+
+            # Use deep ingestion
+            result = await ingestion_pipeline.ingest_url_deep(
+                url=url,
+                user_id=user_id,
+                title=title,
+                max_depth=2,
+                max_pages=int(max_pages)
+            )
+
+            if result["success"]:
+                return {
+                    "operation": "ingest_documentation",
+                    "success": True,
+                    "url": url,
+                    "title": result.get("title"),
+                    "pages_ingested": result.get("pages_ingested"),
+                    "total_pages_crawled": result.get("total_pages_crawled"),
+                    "chunks_count": result.get("chunks_count"),
+                    "message": f"Documentazione importata: {result.get('title')} - {result.get('pages_ingested')} pagine, {result.get('chunks_count')} chunks"
+                }
+            else:
+                return {"error": result.get("error", "Errore nell'importazione")}
+
+        except Exception as e:
+            self.logger.error(f"ingest_documentation failed: {e}")
             return {"error": f"Errore nell'importazione: {str(e)}"}
 
     async def _tool_ingest_text(self, params: dict, user_id: str) -> dict:

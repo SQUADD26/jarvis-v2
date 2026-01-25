@@ -112,6 +112,163 @@ class IngestionPipeline:
             "content_length": len(content)
         }
 
+    async def ingest_url_deep(
+        self,
+        url: str,
+        user_id: str,
+        title: str = None,
+        max_depth: int = 2,
+        max_pages: int = 50,
+        custom_metadata: dict = None
+    ) -> dict:
+        """
+        Deep crawl a URL following internal links and ingest all pages.
+
+        Args:
+            url: Starting URL to crawl
+            user_id: User ID
+            title: Optional title for the collection
+            max_depth: Max depth of links to follow (default: 2)
+            max_pages: Max pages to crawl (default: 50)
+            custom_metadata: Optional metadata
+
+        Returns:
+            dict with success status, pages ingested, chunks count
+        """
+        logger.info(f"Starting deep ingestion of {url} (max_depth={max_depth}, max_pages={max_pages})")
+
+        # Deep crawl the URL
+        crawl_result = await crawler.deep_crawl(
+            url=url,
+            max_depth=max_depth,
+            max_pages=max_pages,
+            include_external=False
+        )
+
+        if not crawl_result.get("success") or not crawl_result.get("pages"):
+            return {
+                "success": False,
+                "error": "Nessuna pagina trovata nel crawling",
+                "url": url
+            }
+
+        pages = crawl_result["pages"]
+        total_chunks = 0
+        source_ids = []
+
+        # Generate collection title
+        collection_title = title or self._extract_title_from_url(url)
+        parsed_url = urlparse(url)
+
+        # Batch duplicate check - get all existing URLs for this user
+        existing_urls = await self._get_existing_urls(user_id, [p["url"] for p in pages])
+
+        # Filter and prepare pages for processing
+        valid_pages = []
+        for page in pages:
+            page_url = page["url"]
+            page_content = page["content"]
+
+            if not page_content or len(page_content) < 50:
+                logger.debug(f"Skipping page with insufficient content: {page_url}")
+                continue
+
+            if page_url in existing_urls:
+                logger.debug(f"Skipping duplicate page: {page_url}")
+                continue
+
+            valid_pages.append(page)
+
+        if not valid_pages:
+            return {
+                "success": False,
+                "error": "Nessuna nuova pagina da importare (tutte duplicate o con contenuto insufficiente)",
+                "url": url
+            }
+
+        # Batch create sources
+        source_records = []
+        for page in valid_pages:
+            page_url = page["url"]
+            page_content = page["content"]
+            page_title = page.get("title") or self._extract_title_from_url(page_url)
+            content_hash = hashlib.md5(page_content.encode()).hexdigest()
+
+            source_records.append({
+                "user_id": user_id,
+                "title": f"{collection_title} - {page_title}",
+                "source_type": "url",
+                "source_url": page_url,
+                "file_hash": content_hash,
+                "domain": parsed_url.netloc,
+                "content_length": len(page_content),
+                "metadata": {
+                    **(custom_metadata or {}),
+                    "collection": collection_title,
+                    "crawl_depth": page.get("depth", 0),
+                    "parent_url": url
+                },
+                "status": "processing"
+            })
+
+        # Batch insert sources
+        created_sources = await self._batch_create_sources(source_records)
+        if not created_sources:
+            return {
+                "success": False,
+                "error": "Errore nella creazione dei record sorgente",
+                "url": url
+            }
+
+        # Map source_url to source_id
+        url_to_source = {s["source_url"]: s for s in created_sources}
+
+        # Process chunks for each page (embeddings need per-source processing)
+        sources_to_update = []
+        for i, page in enumerate(valid_pages):
+            page_url = page["url"]
+            source = url_to_source.get(page_url)
+            if not source:
+                continue
+
+            page_title = page.get("title") or self._extract_title_from_url(page_url)
+            chunk_metadata = {
+                "source_url": page_url,
+                "domain": parsed_url.netloc,
+                "title": page_title,
+                "collection": collection_title
+            }
+            chunks = chunker.chunk_text(page["content"], chunk_metadata)
+
+            if chunks:
+                stored_count = await self._store_chunks(chunks, source["id"], user_id)
+                sources_to_update.append({"id": source["id"], "status": "active", "chunks_count": stored_count})
+                total_chunks += stored_count
+                source_ids.append(source["id"])
+                logger.info(f"Ingested page {i+1}/{len(valid_pages)}: {page_title[:40]} ({stored_count} chunks)")
+            else:
+                sources_to_update.append({"id": source["id"], "status": "failed", "chunks_count": 0})
+
+        # Batch update source statuses
+        await self._batch_update_sources(sources_to_update)
+
+        if not source_ids:
+            return {
+                "success": False,
+                "error": "Nessuna pagina valida da importare",
+                "url": url
+            }
+
+        return {
+            "success": True,
+            "url": url,
+            "title": collection_title,
+            "pages_ingested": len(source_ids),
+            "total_pages_crawled": len(pages),
+            "chunks_count": total_chunks,
+            "source_ids": source_ids
+        }
+
     async def ingest_text(
         self,
         text: str,
@@ -319,17 +476,83 @@ class IngestionPipeline:
         except Exception:
             return None
 
+    async def _get_existing_urls(self, user_id: str, urls: list[str]) -> set[str]:
+        """Batch check for existing URLs. Returns set of URLs that already exist."""
+        if not urls:
+            return set()
+        db = get_db()
+        try:
+            result = db.table("rag_sources") \
+                .select("source_url") \
+                .eq("user_id", user_id) \
+                .eq("status", "active") \
+                .in_("source_url", urls) \
+                .execute()
+            return {r["source_url"] for r in result.data} if result.data else set()
+        except Exception as e:
+            logger.error(f"Failed to check existing URLs: {e}")
+            return set()
+
+    async def _batch_create_sources(self, source_records: list[dict]) -> list[dict]:
+        """Batch create source records."""
+        if not source_records:
+            return []
+        db = get_db()
+        try:
+            result = db.table("rag_sources").insert(source_records).execute()
+            return result.data if result.data else []
+        except Exception as e:
+            logger.error(f"Failed to batch create sources: {e}")
+            return []
+
+    async def _batch_update_sources(self, updates: list[dict]) -> None:
+        """
+        Batch update source statuses using concurrent execution.
+        Each update dict has: id, status, chunks_count.
+        Note: Supabase doesn't support UPDATE with different values in single call,
+        so we use concurrent execution for efficiency.
+        """
+        if not updates:
+            return
+
+        async def update_single(update: dict) -> None:
+            db = get_db()
+            update_data = {
+                "status": update["status"],
+                "chunks_count": update.get("chunks_count", 0),
+                "updated_at": datetime.utcnow().isoformat()
+            }
+            db.table("rag_sources") \
+                .update(update_data) \
+                .eq("id", update["id"]) \
+                .execute()
+
+        try:
+            # Execute updates concurrently (max 10 at a time)
+            semaphore = asyncio.Semaphore(10)
+
+            async def update_with_limit(update: dict) -> None:
+                async with semaphore:
+                    await update_single(update)
+
+            await asyncio.gather(*[update_with_limit(u) for u in updates])
+        except Exception as e:
+            logger.error(f"Failed to batch update sources: {e}")
+
     async def _store_chunks(
         self,
         chunks: list[Chunk],
         source_id: str,
         user_id: str
     ) -> int:
-        """Store chunks with OpenAI embeddings."""
+        """
+        Store chunks with OpenAI embeddings.
+        Uses batch insert - Supabase's insert(list) performs a single INSERT statement.
+        """
         db = get_db()
         stored = 0
 
-        # Process in batches
+        # Process in batches (for embedding generation efficiency)
         for i in range(0, len(chunks), self.batch_size):
             batch = chunks[i:i + self.batch_size]
 
@@ -352,6 +575,7 @@ class IngestionPipeline:
                 })
 
             try:
+                # Batch insert: Supabase insert(list) performs single INSERT with all values
                 result = db.table("rag_chunks").insert(records).execute()
                 stored += len(result.data) if result.data else 0
             except Exception as e:
