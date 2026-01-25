@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     voice_sensitivity: float = Field(default=0.5, alias="VOICE_SENSITIVITY")
     voice_silence_timeout: float = Field(default=2.0, alias="VOICE_SILENCE_TIMEOUT")
     voice_max_recording: float = Field(default=30.0, alias="VOICE_MAX_RECORDING")
-    deepgram_tts_model: str = Field(default="aura-orion-en", alias="DEEPGRAM_TTS_MODEL")
+    deepgram_tts_model: str = Field(default="aura-2-livia-it", alias="DEEPGRAM_TTS_MODEL")
 
     # Crawl4AI
     crawl4ai_url: str = Field(default="http://srv938822.hstgr.cloud:11235", alias="CRAWL4AI_URL")
