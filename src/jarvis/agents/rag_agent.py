@@ -66,7 +66,7 @@ Rispondi SOLO con il JSON."""
 
 class RAGAgent(BaseAgent):
     name = "rag"
-    resource_type = "rag"
+    resource_type = None  # No caching - RAG operations should always execute
 
     async def _execute(self, state: JarvisState) -> Any:
         """Execute RAG operations using LLM reasoning."""

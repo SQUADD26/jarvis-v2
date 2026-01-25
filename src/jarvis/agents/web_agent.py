@@ -49,7 +49,7 @@ Rispondi SOLO con il JSON, nient'altro."""
 
 class WebAgent(BaseAgent):
     name = "web"
-    resource_type = "web"
+    resource_type = None  # No caching - web operations should always execute fresh
 
     async def _execute(self, state: JarvisState) -> Any:
         """Execute web operations using LLM reasoning."""

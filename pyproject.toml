@@ -41,11 +41,16 @@ dependencies = [
     "numpy>=1.26.0",
     "dateparser>=1.2.0",
 
+    # API Server (VPS)
+    "fastapi>=0.115.0",
+    "uvicorn>=0.30.0",
+
     # Voice (local client)
-    "openwakeword>=0.6.0",     # Wake word detection (free, no API key)
+    "pvporcupine>=3.0.0",      # Wake word detection (needs API key)
     "pyaudio>=0.2.14",         # Audio capture
     "sounddevice>=0.4.6",      # Audio playback
     "webrtcvad>=2.0.10",       # Voice activity detection
+    "pynput>=1.7.6",           # Global hotkeys for PTT
     "setuptools>=70.0.0",      # For pkg_resources (webrtcvad dependency)
 ]
 

@@ -47,8 +47,15 @@ class Settings(BaseSettings):
     default_model: str = "gemini-2.0-flash"
     powerful_model: str = "gemini-2.5-pro-preview-05-06"
 
+    # Jarvis API (for voice client communication)
+    jarvis_api_key: str = Field(default="", alias="JARVIS_API_KEY")
+    jarvis_api_url: str = Field(default="", alias="JARVIS_API_URL")  # e.g. http://vps:8000
+
     # Voice (local client)
-    wake_word_threshold: float = Field(default=0.5, alias="WAKE_WORD_THRESHOLD")  # 0-1, higher = less sensitive
+    porcupine_access_key: str = Field(default="", alias="PORCUPINE_ACCESS_KEY")
+    voice_mode: str = Field(default="ptt", alias="VOICE_MODE")  # "ptt" or "wake_word"
+    voice_ptt_key: str = Field(default="<cmd>+<shift>+j", alias="VOICE_PTT_KEY")
+    voice_sensitivity: float = Field(default=0.5, alias="VOICE_SENSITIVITY")
     voice_silence_timeout: float = Field(default=2.0, alias="VOICE_SILENCE_TIMEOUT")
     voice_max_recording: float = Field(default=30.0, alias="VOICE_MAX_RECORDING")
     deepgram_tts_model: str = Field(default="aura-orion-en", alias="DEEPGRAM_TTS_MODEL")
