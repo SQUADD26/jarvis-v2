@@ -19,6 +19,16 @@ class BaseAgent(ABC):
         user_id = state["user_id"]
 
         try:
+            # Skip caching entirely if resource_type is None
+            if self.resource_type is None:
+                data = await self._execute(state)
+                return AgentResult(
+                    agent_name=self.name,
+                    success=True,
+                    data=data,
+                    error=None
+                )
+
             # Check if we need fresh data
             needs_refresh = state.get("needs_refresh", {}).get(self.resource_type, True)
 
