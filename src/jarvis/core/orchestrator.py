@@ -44,6 +44,10 @@ REGOLE FONDAMENTALI:
    - NON suggerire azioni non chieste
    - NON fare osservazioni su cose non menzionate
 
+5. MAI INVENTARE DATI
+   - Se DATI DAGLI AGENTI è vuoto, NON fingere di aver controllato
+   - Dì "non ho accesso a quei dati" invece di inventare
+
 FORMATTAZIONE TELEGRAM:
 - <b>grassetto</b> per enfasi importante
 - <i>corsivo</i> per dettagli secondari
@@ -68,15 +72,30 @@ async def analyze_intent(state: JarvisState) -> JarvisState:
     # Get required agents from router
     required_agents = router.get_required_agents(intent)
 
-    # If intent is complex/unknown OR confidence is low, use LLM planner
-    if intent in ("complex", "unknown") or (confidence < 0.80 and not required_agents):
-        logger.info(f"Router uncertain (intent={intent}, conf={confidence:.2f}), using planner...")
+    # Keywords that should NEVER be chitchat
+    action_keywords = ["eventi", "agenda", "calendario", "email", "mail", "cerca", "meteo", "riunion", "appuntament", "impegn"]
+    has_action_keyword = any(kw in user_input.lower() for kw in action_keywords)
+
+    # Use planner if:
+    # 1. Intent is complex/unknown
+    # 2. Confidence is below threshold
+    # 3. Classified as chitchat but contains action keywords (router mistake)
+    needs_planner = (
+        intent in ("complex", "unknown") or
+        confidence < 0.80 or
+        (intent == "chitchat" and has_action_keyword)
+    )
+
+    if needs_planner:
+        logger.info(f"Router uncertain or override (intent={intent}, conf={confidence:.2f}, action_kw={has_action_keyword}), using planner...")
         planned_agents = await planner.plan(user_input, user_id)
 
         if planned_agents:
             required_agents = planned_agents
-            intent = "planned"  # Mark as planned for logging
-        # If planner returns empty, it's likely chitchat - keep as is
+            intent = "planned"
+        elif not has_action_keyword:
+            # Only treat as chitchat if no action keywords
+            intent = "chitchat"
 
     logger.info(f"Intent: {intent} (confidence={confidence:.2f}), agents: {required_agents}")
 
