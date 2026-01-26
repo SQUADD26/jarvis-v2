@@ -84,22 +84,29 @@ TOOL DISPONIBILI:
 REGOLE:
 1. Analizza la richiesta e decidi quali tool usare
 2. Calcola le date corrette (es: "domani" = {tomorrow}, "lunedì prossimo" = calcola)
-3. Se la richiesta contiene MULTIPLE OPERAZIONI (es: "crea due eventi", "fissa un appuntamento alle 10 e uno alle 14"), restituisci una LISTA di tool calls
+3. Se la richiesta contiene MULTIPLE OPERAZIONI DISTINTE (es: "fissa un appuntamento alle 10 e uno alle 14"), restituisci una LISTA di tool calls
 4. Per MODIFICARE o ELIMINARE un evento:
    - Se l'utente fornisce il nome/titolo dell'evento, usa PRIMA search_events per trovare l'ID
    - Poi usa update_event o delete_event con l'ID trovato
-   - Restituisci entrambe le operazioni come lista: [{{"tool": "search_events", ...}}, {{"tool": "update_event", ...}}]
+
+⚠️ REGOLE CRITICHE - EVITA DUPLICATI:
+- Ogni operazione va eseguita UNA SOLA VOLTA
+- Se l'utente chiede "fissa appuntamento alle 10 con X e alle 14 con Y" → sono ESATTAMENTE 2 create_event, NON di più
+- NON ripetere la stessa operazione più volte
+- Conta attentamente quanti eventi/operazioni l'utente sta chiedendo
+- "e" o "," separano operazioni DIVERSE, non duplicano la stessa
+
 5. Rispondi SOLO con un JSON valido. Formato:
    - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
    - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
 
 ESEMPI:
-- "cosa ho domani mattina" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}", "start_time": "00:00", "end_time": "13:00"}}}}
-- "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD del giovedì", "start_time": "15:00", "end_time": "17:00"}}}}
-- "fissami un appuntamento alle 10 con Mario e uno alle 14 con Luigi" → [{{"tool": "create_event", "params": {{"title": "Appuntamento con Mario", "date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}, {{"tool": "create_event", "params": {{"title": "Appuntamento con Luigi", "date": "{today}", "start_time": "14:00", "end_time": "15:00"}}}}]
+- "cosa ho domani" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
+- "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD", "start_time": "15:00", "end_time": "17:00"}}}}
+- "fissami appuntamento alle 10 con Mario e alle 14 con Luigi" → ESATTAMENTE 2 eventi:
+  [{{"tool": "create_event", "params": {{"title": "Appuntamento con Mario", "date": "{tomorrow}", "start_time": "10:00", "end_time": "11:00"}}}},
+   {{"tool": "create_event", "params": {{"title": "Appuntamento con Luigi", "date": "{tomorrow}", "start_time": "14:00", "end_time": "15:00"}}}}]
 - "sposta la riunione con Mario alle 16" → {{"tool": "search_events", "params": {{"query": "Mario"}}}}
-- "cerca l'evento dentista" → {{"tool": "search_events", "params": {{"query": "dentista"}}}}
-- "modifica evento ID_123 mettilo alle 15" → {{"tool": "update_event", "params": {{"event_id": "ID_123", "start_time": "15:00", "end_time": "16:00"}}}}
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -151,10 +158,25 @@ class CalendarAgent(BaseAgent):
 
             # Handle both single and multiple tool calls
             if isinstance(decision, list):
-                # Multiple tool calls - execute in parallel
-                self.logger.info(f"Calendar agent: {len(decision)} tool calls to execute")
-                tasks = []
+                # Deduplicate tool calls to prevent duplicates
+                seen = set()
+                unique_calls = []
                 for call in decision:
+                    # Create a unique key for each call
+                    call_key = json.dumps(call, sort_keys=True)
+                    if call_key not in seen:
+                        seen.add(call_key)
+                        unique_calls.append(call)
+                    else:
+                        self.logger.warning(f"Skipping duplicate tool call: {call}")
+
+                if len(unique_calls) != len(decision):
+                    self.logger.warning(f"Removed {len(decision) - len(unique_calls)} duplicate tool calls")
+
+                # Multiple tool calls - execute in parallel
+                self.logger.info(f"Calendar agent: {len(unique_calls)} unique tool calls to execute")
+                tasks = []
+                for call in unique_calls:
                     tool_name = call.get("tool")
                     params = call.get("params", {})
                     self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
@@ -262,12 +284,39 @@ class CalendarAgent(BaseAgent):
             date = params.get("date")
             start_time = params.get("start_time")
             end_time = params.get("end_time")
+            title = params.get("title", "Nuovo evento")
 
             start = datetime.fromisoformat(f"{date}T{start_time}")
             end = datetime.fromisoformat(f"{date}T{end_time}")
 
+            # Check for existing events at the same time to warn about potential conflicts
+            existing_events = calendar_client.get_events(start=start, end=end)
+            conflicts = []
+            for ev in existing_events:
+                # Check if there's an event with similar title at same time (potential duplicate)
+                ev_title = (ev.get("title") or "").lower()
+                if title.lower() in ev_title or ev_title in title.lower():
+                    conflicts.append(ev)
+
+            if conflicts:
+                self.logger.warning(f"Potential duplicate: {title} conflicts with {[c['title'] for c in conflicts]}")
+                # Return warning but still create the event (user might want it)
+                event = calendar_client.create_event(
+                    title=title,
+                    start=start,
+                    end=end,
+                    description=params.get("description"),
+                    location=params.get("location")
+                )
+                return {
+                    "operation": "create_event",
+                    "event": event,
+                    "warning": f"⚠️ Attenzione: esistono già eventi simili in questo orario: {[c['title'] for c in conflicts]}",
+                    "message": f"Evento '{event['title']}' creato per {date} {start_time}-{end_time}"
+                }
+
             event = calendar_client.create_event(
-                title=params.get("title", "Nuovo evento"),
+                title=title,
                 start=start,
                 end=end,
                 description=params.get("description"),
