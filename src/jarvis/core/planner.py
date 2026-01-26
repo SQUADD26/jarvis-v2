@@ -27,10 +27,19 @@ REGOLE:
 5. In caso di dubbio su calendario/email, è meglio includere l'agente che escluderlo
 6. Se l'utente fa riferimento a qualcosa detto prima (es. "riprova", "fallo di nuovo", "continua"), USA IL CONTESTO per capire cosa intende
 
+⚠️ REGOLA CRITICA - VERIFICA/CONTROLLA:
+Quando l'utente chiede di VERIFICARE, CONTROLLARE, CONFERMARE qualcosa (calendario, email, ecc.),
+DEVI SEMPRE attivare l'agente corrispondente per recuperare i dati REALI.
+NON fidarti mai della conversazione precedente - l'utente vuole dati FRESCHI.
+
 ESEMPI:
 - "ciao come stai" → agents: []
 - "cosa ho domani" → agents: ["calendar"]
 - "mi passi l'agenda di lunedì" → agents: ["calendar"]
+- "controlla l'agenda" → agents: ["calendar"]
+- "verifica il calendario" → agents: ["calendar"]
+- "è corretto?" (dopo aver parlato di calendario) → agents: ["calendar"]
+- "controlla se è giusto" → agents: ["calendar"] (o l'agente del contesto)
 - "crea una bozza email" → agents: ["email"]
 - "controlla email e calendario" → agents: ["calendar", "email"]
 - "che tempo fa a Milano" → agents: ["web"]
