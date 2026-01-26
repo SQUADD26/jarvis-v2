@@ -2,6 +2,7 @@
 
 from typing import Any
 import json
+import asyncio
 from jarvis.agents.base import BaseAgent
 from jarvis.core.state import JarvisState
 from jarvis.integrations.perplexity import perplexity
@@ -26,23 +27,25 @@ WEB_TOOLS = [
     }
 ]
 
-AGENT_SYSTEM_PROMPT = """Sei un agente web. Il tuo compito è capire la richiesta dell'utente e chiamare il tool appropriato.
+AGENT_SYSTEM_PROMPT = """Sei un agente web. Il tuo compito è capire la richiesta dell'utente e chiamare i tool appropriati.
 
 TOOL DISPONIBILI:
 {tools}
 
 REGOLE:
-1. Analizza la richiesta e decidi quale tool usare
+1. Analizza la richiesta e decidi quali tool usare
 2. Per ricerche generali, domande, meteo, notizie → usa web_search
 3. Se l'utente fornisce un URL specifico da leggere → usa scrape_url
-4. Rispondi SOLO con un JSON valido nel formato:
-   {{"tool": "nome_tool", "params": {{...parametri...}}}}
+4. Se la richiesta contiene MULTIPLE OPERAZIONI (es: "cerca X e Y", "leggi queste due pagine"), restituisci una LISTA di tool calls
+5. Rispondi SOLO con un JSON valido. Formato:
+   - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
+   - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
 
 ESEMPI:
 - "che tempo fa a Milano" → {{"tool": "web_search", "params": {{"query": "meteo Milano oggi"}}}}
 - "ultime notizie su OpenAI" → {{"tool": "web_search", "params": {{"query": "ultime notizie OpenAI"}}}}
 - "leggi questa pagina https://example.com/article" → {{"tool": "scrape_url", "params": {{"url": "https://example.com/article"}}}}
-- "chi ha vinto le elezioni" → {{"tool": "web_search", "params": {{"query": "risultati elezioni recenti"}}}}
+- "cerca meteo Milano e meteo Roma" → [{{"tool": "web_search", "params": {{"query": "meteo Milano oggi"}}}}, {{"tool": "web_search", "params": {{"query": "meteo Roma oggi"}}}}]
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -79,17 +82,37 @@ class WebAgent(BaseAgent):
                 clean_response = clean_response.strip()
 
             decision = json.loads(clean_response)
-            tool_name = decision.get("tool")
-            params = decision.get("params", {})
 
-            self.logger.info(f"Web agent decision: {tool_name} with {params}")
+            # Handle both single and multiple tool calls
+            if isinstance(decision, list):
+                # Multiple tool calls - execute in parallel
+                self.logger.info(f"Web agent: {len(decision)} tool calls to execute")
+                tasks = []
+                for call in decision:
+                    tool_name = call.get("tool")
+                    params = call.get("params", {})
+                    self.logger.info(f"Web agent decision: {tool_name} with {params}")
+                    tasks.append(self._execute_tool(tool_name, params))
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Convert exceptions to error dicts
+                processed_results = []
+                for r in results:
+                    if isinstance(r, Exception):
+                        processed_results.append({"error": str(r)})
+                    else:
+                        processed_results.append(r)
+                return {"multiple_results": processed_results}
+            else:
+                # Single tool call
+                tool_name = decision.get("tool")
+                params = decision.get("params", {})
+                self.logger.info(f"Web agent decision: {tool_name} with {params}")
+                return await self._execute_tool(tool_name, params)
 
         except Exception as e:
             self.logger.error(f"Failed to parse LLM response: {response[:200]}")
             return {"error": f"Non ho capito la richiesta: {str(e)}"}
-
-        # Execute the tool
-        return await self._execute_tool(tool_name, params)
 
     async def _execute_tool(self, tool_name: str, params: dict) -> dict:
         """Execute the selected tool with given parameters."""

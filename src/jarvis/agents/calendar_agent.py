@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta
 from typing import Any
 import json
+import asyncio
 from jarvis.agents.base import BaseAgent
 from jarvis.core.state import JarvisState
 from jarvis.integrations.google_calendar import calendar_client
@@ -50,7 +51,7 @@ CALENDAR_TOOLS = [
     }
 ]
 
-AGENT_SYSTEM_PROMPT = """Sei un agente calendario. Il tuo compito è capire la richiesta dell'utente e chiamare il tool appropriato.
+AGENT_SYSTEM_PROMPT = """Sei un agente calendario. Il tuo compito è capire la richiesta dell'utente e chiamare i tool appropriati.
 
 OGGI: {today}
 GIORNO DELLA SETTIMANA: {weekday}
@@ -59,15 +60,17 @@ TOOL DISPONIBILI:
 {tools}
 
 REGOLE:
-1. Analizza la richiesta e decidi quale tool usare
+1. Analizza la richiesta e decidi quali tool usare
 2. Calcola le date corrette (es: "domani" = {tomorrow}, "lunedì prossimo" = calcola)
-3. Rispondi SOLO con un JSON valido nel formato:
-   {{"tool": "nome_tool", "params": {{...parametri...}}}}
+3. Se la richiesta contiene MULTIPLE OPERAZIONI (es: "crea due eventi", "fissa un appuntamento alle 10 e uno alle 14"), restituisci una LISTA di tool calls
+4. Rispondi SOLO con un JSON valido. Formato:
+   - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
+   - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
 
 ESEMPI:
 - "cosa ho domani mattina" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}", "start_time": "00:00", "end_time": "13:00"}}}}
 - "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD del giovedì", "start_time": "15:00", "end_time": "17:00"}}}}
-- "che impegni ho questa settimana" → {{"tool": "get_events", "params": {{"start_date": "{today}", "end_date": "data di domenica"}}}}
+- "fissami un appuntamento alle 10 con Mario e uno alle 14 con Luigi" → [{{"tool": "create_event", "params": {{"title": "Appuntamento con Mario", "date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}, {{"tool": "create_event", "params": {{"title": "Appuntamento con Luigi", "date": "{today}", "start_time": "14:00", "end_time": "15:00"}}}}]
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -116,17 +119,37 @@ class CalendarAgent(BaseAgent):
                 clean_response = clean_response.strip()
 
             decision = json.loads(clean_response)
-            tool_name = decision.get("tool")
-            params = decision.get("params", {})
 
-            self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
+            # Handle both single and multiple tool calls
+            if isinstance(decision, list):
+                # Multiple tool calls - execute in parallel
+                self.logger.info(f"Calendar agent: {len(decision)} tool calls to execute")
+                tasks = []
+                for call in decision:
+                    tool_name = call.get("tool")
+                    params = call.get("params", {})
+                    self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
+                    tasks.append(self._execute_tool(tool_name, params))
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Convert exceptions to error dicts
+                processed_results = []
+                for r in results:
+                    if isinstance(r, Exception):
+                        processed_results.append({"error": str(r)})
+                    else:
+                        processed_results.append(r)
+                return {"multiple_results": processed_results}
+            else:
+                # Single tool call
+                tool_name = decision.get("tool")
+                params = decision.get("params", {})
+                self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
+                return await self._execute_tool(tool_name, params)
 
         except Exception as e:
             self.logger.error(f"Failed to parse LLM response: {response[:200]}")
             return {"error": f"Non ho capito la richiesta: {str(e)}"}
-
-        # Execute the tool
-        return await self._execute_tool(tool_name, params)
 
     async def _execute_tool(self, tool_name: str, params: dict) -> dict:
         """Execute the selected tool with given parameters."""

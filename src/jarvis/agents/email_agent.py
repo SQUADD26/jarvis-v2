@@ -2,6 +2,7 @@
 
 from typing import Any
 import json
+import asyncio
 from jarvis.agents.base import BaseAgent
 from jarvis.core.state import JarvisState
 from jarvis.integrations.gmail import gmail_client
@@ -61,26 +62,28 @@ EMAIL_TOOLS = [
     }
 ]
 
-AGENT_SYSTEM_PROMPT = """Sei un agente email. Il tuo compito è capire la richiesta dell'utente e chiamare il tool appropriato.
+AGENT_SYSTEM_PROMPT = """Sei un agente email. Il tuo compito è capire la richiesta dell'utente e chiamare i tool appropriati.
 
 TOOL DISPONIBILI:
 {tools}
 
 REGOLE:
-1. Analizza la richiesta e decidi quale tool usare
+1. Analizza la richiesta e decidi quali tool usare
 2. Per "controllare email" o "nuove email" usa get_inbox con unread_only=true
 3. Per "scrivere email" o "inviare a X" usa send_email
 4. Per "bozza" o "draft" usa create_draft
 5. Se l'utente vuole scrivere ma non specifica destinatario, usa create_draft
-6. Rispondi SOLO con un JSON valido nel formato:
-   {{"tool": "nome_tool", "params": {{...parametri...}}}}
+6. Se la richiesta contiene MULTIPLE OPERAZIONI (es: "invia due email", "scrivi a Mario e a Luigi"), restituisci una LISTA di tool calls
+7. Rispondi SOLO con un JSON valido. Formato:
+   - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
+   - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
 
 ESEMPI:
 - "controlla le email" → {{"tool": "get_inbox", "params": {{"max_results": 10, "unread_only": false}}}}
 - "ho email nuove?" → {{"tool": "get_inbox", "params": {{"max_results": 10, "unread_only": true}}}}
 - "email da mario" → {{"tool": "search_emails", "params": {{"query": "from:mario", "max_results": 10}}}}
 - "scrivi a test@example.com oggetto Ciao corpo Saluti" → {{"tool": "send_email", "params": {{"to": "test@example.com", "subject": "Ciao", "body": "Saluti"}}}}
-- "crea bozza email per il progetto" → {{"tool": "create_draft", "params": {{"subject": "Progetto", "body": "..."}}}}
+- "invia un'email a mario@test.com e una a luigi@test.com" → [{{"tool": "send_email", "params": {{"to": "mario@test.com", "subject": "...", "body": "..."}}}}, {{"tool": "send_email", "params": {{"to": "luigi@test.com", "subject": "...", "body": "..."}}}}]
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -117,17 +120,37 @@ class EmailAgent(BaseAgent):
                 clean_response = clean_response.strip()
 
             decision = json.loads(clean_response)
-            tool_name = decision.get("tool")
-            params = decision.get("params", {})
 
-            self.logger.info(f"Email agent decision: {tool_name} with {params}")
+            # Handle both single and multiple tool calls
+            if isinstance(decision, list):
+                # Multiple tool calls - execute in parallel
+                self.logger.info(f"Email agent: {len(decision)} tool calls to execute")
+                tasks = []
+                for call in decision:
+                    tool_name = call.get("tool")
+                    params = call.get("params", {})
+                    self.logger.info(f"Email agent decision: {tool_name} with {params}")
+                    tasks.append(self._execute_tool(tool_name, params))
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Convert exceptions to error dicts
+                processed_results = []
+                for r in results:
+                    if isinstance(r, Exception):
+                        processed_results.append({"error": str(r)})
+                    else:
+                        processed_results.append(r)
+                return {"multiple_results": processed_results}
+            else:
+                # Single tool call
+                tool_name = decision.get("tool")
+                params = decision.get("params", {})
+                self.logger.info(f"Email agent decision: {tool_name} with {params}")
+                return await self._execute_tool(tool_name, params)
 
         except Exception as e:
             self.logger.error(f"Failed to parse LLM response: {response[:200]}")
             return {"error": f"Non ho capito la richiesta: {str(e)}"}
-
-        # Execute the tool
-        return await self._execute_tool(tool_name, params)
 
     async def _execute_tool(self, tool_name: str, params: dict) -> dict:
         """Execute the selected tool with given parameters."""

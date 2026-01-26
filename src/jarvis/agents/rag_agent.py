@@ -2,6 +2,7 @@
 
 from typing import Any
 import json
+import asyncio
 from jarvis.agents.base import BaseAgent
 from jarvis.core.state import JarvisState
 from jarvis.integrations.gemini import gemini
@@ -63,15 +64,16 @@ REGOLE:
 3. Per salvare DOCUMENTAZIONE MULTI-PAGINA (docs, guide, wiki) → usa ingest_documentation
 4. Per salvare testo/note → usa ingest_text
 5. Per vedere documenti disponibili → usa list_documents
-6. Rispondi SOLO con JSON: {{"tool": "nome_tool", "params": {{...}}}}
+6. Se la richiesta contiene MULTIPLE OPERAZIONI (es: "cerca X e Y", "importa questi due URL"), restituisci una LISTA di tool calls
+7. Rispondi SOLO con JSON. Formato:
+   - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
+   - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
 
 ESEMPI:
 - "cerca info sul progetto Alpha" → {{"tool": "search_knowledge", "params": {{"query": "progetto Alpha"}}}}
 - "salva questa pagina https://..." → {{"tool": "ingest_url", "params": {{"url": "https://..."}}}}
 - "importa la documentazione di https://docs.example.com" → {{"tool": "ingest_documentation", "params": {{"url": "https://docs.example.com", "title": "Example Docs", "max_pages": 500}}}}
-- "ingerisci questo sito https://wiki.example.com" → {{"tool": "ingest_documentation", "params": {{"url": "https://wiki.example.com", "title": "Wiki", "max_pages": 500}}}}
-- "memorizza questa nota: ..." → {{"tool": "ingest_text", "params": {{"text": "...", "title": "Nota"}}}}
-- "che documenti ho" → {{"tool": "list_documents", "params": {{"limit": 10}}}}
+- "cerca info su Alpha e su Beta" → [{{"tool": "search_knowledge", "params": {{"query": "progetto Alpha"}}}}, {{"tool": "search_knowledge", "params": {{"query": "progetto Beta"}}}}]
 
 Rispondi SOLO con il JSON."""
 
@@ -133,17 +135,37 @@ class RAGAgent(BaseAgent):
                 clean_response = clean_response.strip()
 
             decision = json.loads(clean_response)
-            tool_name = decision.get("tool")
-            params = decision.get("params", {})
 
-            self.logger.info(f"RAG agent decision: {tool_name} with {params}")
+            # Handle both single and multiple tool calls
+            if isinstance(decision, list):
+                # Multiple tool calls - execute in parallel
+                self.logger.info(f"RAG agent: {len(decision)} tool calls to execute")
+                tasks = []
+                for call in decision:
+                    tool_name = call.get("tool")
+                    params = call.get("params", {})
+                    self.logger.info(f"RAG agent decision: {tool_name} with {params}")
+                    tasks.append(self._execute_tool(tool_name, params, user_id))
+
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+                # Convert exceptions to error dicts
+                processed_results = []
+                for r in results:
+                    if isinstance(r, Exception):
+                        processed_results.append({"error": str(r)})
+                    else:
+                        processed_results.append(r)
+                return {"multiple_results": processed_results}
+            else:
+                # Single tool call
+                tool_name = decision.get("tool")
+                params = decision.get("params", {})
+                self.logger.info(f"RAG agent decision: {tool_name} with {params}")
+                return await self._execute_tool(tool_name, params, user_id)
 
         except Exception as e:
             self.logger.error(f"Failed to parse LLM response: {response[:200]}")
             return {"error": f"Non ho capito la richiesta: {str(e)}"}
-
-        # Execute the tool
-        return await self._execute_tool(tool_name, params, user_id)
 
     async def _execute_tool(self, tool_name: str, params: dict, user_id: str) -> dict:
         """Execute the selected tool."""
