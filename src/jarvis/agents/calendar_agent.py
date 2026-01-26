@@ -22,6 +22,15 @@ CALENDAR_TOOLS = [
         }
     },
     {
+        "name": "search_events",
+        "description": "Cerca eventi per titolo/keyword. Utile per trovare l'ID di un evento prima di modificarlo o eliminarlo.",
+        "parameters": {
+            "query": "Testo da cercare nel titolo dell'evento",
+            "start_date": "Data inizio ricerca (default: oggi)",
+            "end_date": "Data fine ricerca (default: +30 giorni)"
+        }
+    },
+    {
         "name": "create_event",
         "description": "Crea un nuovo evento nel calendario",
         "parameters": {
@@ -34,8 +43,21 @@ CALENDAR_TOOLS = [
         }
     },
     {
+        "name": "update_event",
+        "description": "Modifica un evento esistente. Richiede l'event_id (usa search_events per trovarlo).",
+        "parameters": {
+            "event_id": "ID dell'evento da modificare",
+            "title": "Nuovo titolo (opzionale)",
+            "date": "Nuova data in formato YYYY-MM-DD (opzionale)",
+            "start_time": "Nuova ora inizio in formato HH:MM (opzionale)",
+            "end_time": "Nuova ora fine in formato HH:MM (opzionale)",
+            "description": "Nuova descrizione (opzionale)",
+            "location": "Nuovo luogo (opzionale)"
+        }
+    },
+    {
         "name": "delete_event",
-        "description": "Elimina un evento dal calendario",
+        "description": "Elimina un evento dal calendario. Richiede l'event_id (usa search_events per trovarlo).",
         "parameters": {
             "event_id": "ID dell'evento da eliminare"
         }
@@ -63,7 +85,11 @@ REGOLE:
 1. Analizza la richiesta e decidi quali tool usare
 2. Calcola le date corrette (es: "domani" = {tomorrow}, "lunedì prossimo" = calcola)
 3. Se la richiesta contiene MULTIPLE OPERAZIONI (es: "crea due eventi", "fissa un appuntamento alle 10 e uno alle 14"), restituisci una LISTA di tool calls
-4. Rispondi SOLO con un JSON valido. Formato:
+4. Per MODIFICARE o ELIMINARE un evento:
+   - Se l'utente fornisce il nome/titolo dell'evento, usa PRIMA search_events per trovare l'ID
+   - Poi usa update_event o delete_event con l'ID trovato
+   - Restituisci entrambe le operazioni come lista: [{{"tool": "search_events", ...}}, {{"tool": "update_event", ...}}]
+5. Rispondi SOLO con un JSON valido. Formato:
    - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
    - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
 
@@ -71,6 +97,9 @@ ESEMPI:
 - "cosa ho domani mattina" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}", "start_time": "00:00", "end_time": "13:00"}}}}
 - "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD del giovedì", "start_time": "15:00", "end_time": "17:00"}}}}
 - "fissami un appuntamento alle 10 con Mario e uno alle 14 con Luigi" → [{{"tool": "create_event", "params": {{"title": "Appuntamento con Mario", "date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}, {{"tool": "create_event", "params": {{"title": "Appuntamento con Luigi", "date": "{today}", "start_time": "14:00", "end_time": "15:00"}}}}]
+- "sposta la riunione con Mario alle 16" → {{"tool": "search_events", "params": {{"query": "Mario"}}}}
+- "cerca l'evento dentista" → {{"tool": "search_events", "params": {{"query": "dentista"}}}}
+- "modifica evento ID_123 mettilo alle 15" → {{"tool": "update_event", "params": {{"event_id": "ID_123", "start_time": "15:00", "end_time": "16:00"}}}}
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -156,8 +185,12 @@ class CalendarAgent(BaseAgent):
 
         if tool_name == "get_events":
             return await self._tool_get_events(params)
+        elif tool_name == "search_events":
+            return await self._tool_search_events(params)
         elif tool_name == "create_event":
             return await self._tool_create_event(params)
+        elif tool_name == "update_event":
+            return await self._tool_update_event(params)
         elif tool_name == "delete_event":
             return await self._tool_delete_event(params)
         elif tool_name == "find_free_slots":
@@ -188,6 +221,41 @@ class CalendarAgent(BaseAgent):
             self.logger.error(f"get_events failed: {e}")
             return {"error": f"Errore nel recupero eventi: {str(e)}"}
 
+    async def _tool_search_events(self, params: dict) -> dict:
+        """Search events by title/keyword."""
+        try:
+            query = params.get("query", "").lower()
+            now = datetime.now()
+
+            # Default search range: today to +30 days
+            start_date = params.get("start_date", now.strftime("%Y-%m-%d"))
+            end_date = params.get("end_date", (now + timedelta(days=30)).strftime("%Y-%m-%d"))
+
+            start = datetime.fromisoformat(f"{start_date}T00:00")
+            end = datetime.fromisoformat(f"{end_date}T23:59")
+
+            # Get all events in range
+            all_events = calendar_client.get_events(start=start, end=end, max_results=100)
+
+            # Filter by query (search in title and description)
+            matching = []
+            for event in all_events:
+                title = (event.get("title") or "").lower()
+                description = (event.get("description") or "").lower()
+                if query in title or query in description:
+                    matching.append(event)
+
+            return {
+                "operation": "search_events",
+                "query": query,
+                "events": matching,
+                "count": len(matching),
+                "message": f"Trovati {len(matching)} eventi con '{query}'" if matching else f"Nessun evento trovato con '{query}'"
+            }
+        except Exception as e:
+            self.logger.error(f"search_events failed: {e}")
+            return {"error": f"Errore nella ricerca eventi: {str(e)}"}
+
     async def _tool_create_event(self, params: dict) -> dict:
         """Create a calendar event."""
         try:
@@ -214,6 +282,54 @@ class CalendarAgent(BaseAgent):
         except Exception as e:
             self.logger.error(f"create_event failed: {e}")
             return {"error": f"Errore nella creazione evento: {str(e)}"}
+
+    async def _tool_update_event(self, params: dict) -> dict:
+        """Update an existing calendar event."""
+        try:
+            event_id = params.get("event_id")
+            if not event_id:
+                return {"error": "event_id mancante. Usa search_events per trovare l'ID dell'evento."}
+
+            # Build updates dict
+            updates = {}
+
+            if params.get("title"):
+                updates["title"] = params["title"]
+            if params.get("description"):
+                updates["description"] = params["description"]
+            if params.get("location"):
+                updates["location"] = params["location"]
+
+            # Handle date/time updates
+            date = params.get("date")
+            start_time = params.get("start_time")
+            end_time = params.get("end_time")
+
+            if date and start_time:
+                updates["start"] = datetime.fromisoformat(f"{date}T{start_time}")
+            elif start_time:
+                # If only time provided, we need to get current event date
+                # For now, assume today if date not provided
+                updates["start"] = datetime.fromisoformat(f"{datetime.now().strftime('%Y-%m-%d')}T{start_time}")
+
+            if date and end_time:
+                updates["end"] = datetime.fromisoformat(f"{date}T{end_time}")
+            elif end_time:
+                updates["end"] = datetime.fromisoformat(f"{datetime.now().strftime('%Y-%m-%d')}T{end_time}")
+
+            if not updates:
+                return {"error": "Nessuna modifica specificata"}
+
+            event = calendar_client.update_event(event_id=event_id, updates=updates)
+
+            return {
+                "operation": "update_event",
+                "event": event,
+                "message": f"Evento '{event['title']}' aggiornato"
+            }
+        except Exception as e:
+            self.logger.error(f"update_event failed: {e}")
+            return {"error": f"Errore nell'aggiornamento evento: {str(e)}"}
 
     async def _tool_delete_event(self, params: dict) -> dict:
         """Delete a calendar event."""
