@@ -11,7 +11,8 @@ AGENT_CAPABILITIES = {
     "calendar": "Accesso al calendario Google: leggere eventi, CREARE nuovi eventi, modificare, cancellare, bloccare slot, fissare appuntamenti",
     "email": "Accesso a Gmail: leggere email, scrivere email, creare bozze, rispondere, cercare messaggi",
     "web": "Ricerca web: cercare informazioni online, meteo, notizie, fatti attuali",
-    "rag": "Knowledge base personale: cercare nei documenti dell'utente, file caricati, note"
+    "rag": "Knowledge base personale: cercare nei documenti dell'utente, file caricati, note",
+    "kg": "Knowledge graph personale: informazioni su persone, organizzazioni, colleghi, relazioni. Domande come 'chi e X?', 'chi sono i miei colleghi?', 'per chi lavora X?', 'dimmi di piu su Y'"
 }
 
 PLANNER_PROMPT = """Sei un planner che decide quali agenti attivare per rispondere alla richiesta dell'utente.
@@ -47,6 +48,12 @@ ESEMPI:
 - "grazie mille" → agents: []
 - "riprova" (dopo richiesta di ingestione URL) → agents: ["rag"]
 - "fallo" (dopo richiesta di creare evento) → agents: ["calendar"]
+- "chi e Marco Rossi?" → agents: ["kg"]
+- "chi sono i miei colleghi?" → agents: ["kg"]
+- "dimmi di piu su Acme" → agents: ["kg"]
+- "per chi lavora Giovanni?" → agents: ["kg"]
+- "quali persone conosco?" → agents: ["kg"]
+- "chi e il mio capo?" → agents: ["kg"]
 
 Rispondi SOLO con un JSON valido:
 {{"agents": ["agent1", "agent2"], "reasoning": "breve spiegazione"}}

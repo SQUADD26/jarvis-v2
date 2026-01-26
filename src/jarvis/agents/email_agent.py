@@ -1,5 +1,6 @@
 """Email agent - LLM-powered with tool calling."""
 
+import re
 from typing import Any
 import json
 import asyncio
@@ -7,6 +8,8 @@ from jarvis.agents.base import BaseAgent
 from jarvis.core.state import JarvisState
 from jarvis.integrations.gmail import gmail_client
 from jarvis.integrations.gemini import gemini
+from jarvis.integrations.openai_embeddings import openai_embeddings
+from jarvis.db.kg_repository import KGEntityRepository, KGAliasRepository
 
 # Tool definitions for the LLM
 EMAIL_TOOLS = [
@@ -92,9 +95,69 @@ class EmailAgent(BaseAgent):
     name = "email"
     resource_type = "email"
 
+    async def _enrich_entities_from_emails(self, user_id: str, emails: list[dict]) -> None:
+        """Extract person entities from email senders/recipients (background task)."""
+        try:
+            for email in emails:
+                from_field = email.get("from", "")
+
+                if not from_field:
+                    continue
+
+                # Parse email header: "Name <email@example.com>" or just "email@example.com"
+                name_match = re.match(r'^"?([^"<]+)"?\s*<([^>]+)>$', from_field.strip())
+                if name_match:
+                    name = name_match.group(1).strip()
+                    email_addr = name_match.group(2).strip()
+                else:
+                    # Just an email address
+                    email_addr = from_field.strip()
+                    local_part = email_addr.split("@")[0]
+                    name_parts = local_part.replace(".", " ").replace("_", " ").replace("-", " ").split()
+                    name = " ".join(p.capitalize() for p in name_parts)
+
+                # Skip if name is too short or generic
+                if len(name) < 3 or name.lower() in ["info", "support", "admin", "noreply", "no-reply", "notifications", "newsletter"]:
+                    continue
+
+                # Generate embedding for the entity (OpenAI 3072-dim)
+                embedding = await openai_embeddings.embed(name)
+
+                # Try to create entity (will fail silently if exists)
+                entity = await KGEntityRepository.create_entity(
+                    user_id=user_id,
+                    canonical_name=name,
+                    entity_type="person",
+                    properties={"email": email_addr, "source": "email"},
+                    embedding=embedding,
+                    confidence=0.7,  # Slightly higher confidence from email (has real name)
+                    source_type="email",
+                    source_id=email.get("id")
+                )
+
+                if entity:
+                    # Add email as alias
+                    await KGAliasRepository.add_alias(entity["id"], email_addr, confidence=0.95)
+                    # Add local part as alias
+                    local_part = email_addr.split("@")[0]
+                    await KGAliasRepository.add_alias(entity["id"], local_part, confidence=0.7)
+                    self.logger.debug(f"Created entity from email: {name}")
+                else:
+                    # Entity already exists, try to update mention
+                    existing = await KGEntityRepository.get_entity_by_name(user_id, name, "person")
+                    if existing:
+                        await KGEntityRepository.update_mention(existing["id"])
+                        # Ensure email is added as alias
+                        await KGAliasRepository.add_alias(existing["id"], email_addr, confidence=0.95)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to enrich entities from emails: {e}")
+
     async def _execute(self, state: JarvisState) -> Any:
         """Execute email operations using LLM reasoning."""
         user_input = state["current_input"]
+        user_id = state["user_id"]
+        self._current_user_id = user_id  # Store for tool methods
 
         # Format tools for prompt
         tools_str = json.dumps(EMAIL_TOOLS, indent=2, ensure_ascii=False)
@@ -154,9 +217,10 @@ class EmailAgent(BaseAgent):
 
     async def _execute_tool(self, tool_name: str, params: dict) -> dict:
         """Execute the selected tool with given parameters."""
+        user_id = getattr(self, "_current_user_id", None)
 
         if tool_name == "get_inbox":
-            return await self._tool_get_inbox(params)
+            return await self._tool_get_inbox(params, user_id)
         elif tool_name == "get_email":
             return await self._tool_get_email(params)
         elif tool_name == "send_email":
@@ -166,11 +230,11 @@ class EmailAgent(BaseAgent):
         elif tool_name == "create_draft":
             return await self._tool_create_draft(params)
         elif tool_name == "search_emails":
-            return await self._tool_search_emails(params)
+            return await self._tool_search_emails(params, user_id)
         else:
             return {"error": f"Tool sconosciuto: {tool_name}"}
 
-    async def _tool_get_inbox(self, params: dict) -> dict:
+    async def _tool_get_inbox(self, params: dict, user_id: str = None) -> dict:
         """Get inbox emails."""
         try:
             emails = gmail_client.get_inbox(
@@ -189,6 +253,10 @@ class EmailAgent(BaseAgent):
                     "snippet": email["snippet"][:100] if email.get("snippet") else "",
                     "is_unread": email.get("is_unread", False)
                 })
+
+            # Enrich KG with senders (background task)
+            if summaries and user_id:
+                asyncio.create_task(self._enrich_entities_from_emails(user_id, summaries))
 
             return {
                 "operation": "get_inbox",
@@ -273,7 +341,7 @@ class EmailAgent(BaseAgent):
             self.logger.error(f"create_draft failed: {e}")
             return {"error": f"Errore nella creazione bozza: {str(e)}"}
 
-    async def _tool_search_emails(self, params: dict) -> dict:
+    async def _tool_search_emails(self, params: dict, user_id: str = None) -> dict:
         """Search emails."""
         try:
             query = params.get("query", "")
@@ -289,6 +357,10 @@ class EmailAgent(BaseAgent):
                     "subject": email["subject"],
                     "snippet": email["snippet"][:100] if email.get("snippet") else ""
                 })
+
+            # Enrich KG with senders (background task)
+            if summaries and user_id:
+                asyncio.create_task(self._enrich_entities_from_emails(user_id, summaries))
 
             return {
                 "operation": "search_emails",

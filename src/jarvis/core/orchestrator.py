@@ -6,6 +6,7 @@ from langchain_core.messages import HumanMessage, AIMessage
 from jarvis.core.state import JarvisState
 from jarvis.core.planner import planner
 from jarvis.core.memory import memory
+from jarvis.core.knowledge_graph import knowledge_graph
 from jarvis.core.freshness import freshness
 from jarvis.agents import AGENTS
 from jarvis.integrations.gemini import gemini
@@ -58,6 +59,11 @@ REGOLE FONDAMENTALI:
    - Se ci sono più eventi allo stesso orario, SEGNALALO come possibile problema
    - NON dire "tutto ok" - MOSTRA cosa c'è effettivamente
 
+7. QUANDO USI ENTITÀ CONOSCIUTE:
+   - Usa le informazioni sulle persone/organizzazioni per contestualizzare le risposte
+   - Se l'utente chiede di una persona, usa le proprietà e relazioni note
+   - NON inventare dettagli non presenti nelle entità
+
 FORMATTAZIONE TELEGRAM:
 - <b>grassetto</b> per enfasi importante
 - <i>corsivo</i> per dettagli secondari
@@ -65,6 +71,9 @@ FORMATTAZIONE TELEGRAM:
 
 MEMORIA UTENTE (contesto storico, NON azioni appena eseguite):
 {memory_facts}
+
+ENTITÀ CONOSCIUTE (persone, organizzazioni, relazioni):
+{entity_context}
 
 DATI DAGLI AGENTI (risultato REALE delle azioni di QUESTA richiesta):
 {agent_data}
@@ -102,22 +111,41 @@ async def analyze_intent(state: JarvisState) -> JarvisState:
 
 
 async def load_memory(state: JarvisState) -> JarvisState:
-    """Load relevant memory facts."""
+    """Load relevant memory facts and entities in parallel."""
     user_id = state["user_id"]
     user_input = state["current_input"]
 
-    # Retrieve relevant facts
-    try:
-        facts = await memory.retrieve_relevant_facts(user_id, user_input, limit=5)
-    except Exception as e:
-        logger.warning(f"Failed to load memory: {e}")
-        facts = []
+    # Retrieve facts and entities in parallel
+    facts = []
+    entities = []
 
-    logger.debug(f"Loaded {len(facts)} memory facts")
+    try:
+        facts_task = memory.retrieve_relevant_facts(user_id, user_input, limit=5)
+        entities_task = knowledge_graph.retrieve_relevant_entities(user_id, user_input, limit=5)
+
+        results = await asyncio.gather(facts_task, entities_task, return_exceptions=True)
+
+        # Process facts result
+        if isinstance(results[0], Exception):
+            logger.warning(f"Failed to load memory facts: {results[0]}")
+        else:
+            facts = results[0]
+
+        # Process entities result
+        if isinstance(results[1], Exception):
+            logger.warning(f"Failed to load entities: {results[1]}")
+        else:
+            entities = results[1]
+
+    except Exception as e:
+        logger.warning(f"Failed to load memory/entities: {e}")
+
+    logger.debug(f"Loaded {len(facts)} memory facts, {len(entities)} entities")
 
     return {
         **state,
-        "memory_context": facts
+        "memory_context": facts,
+        "entity_context": entities
     }
 
 
@@ -187,6 +215,7 @@ async def generate_response(state: JarvisState) -> JarvisState:
     intent = state["intent"]
     agent_results = state["agent_results"]
     memory_facts = state["memory_context"]
+    entity_context = state.get("entity_context", [])
     messages = state["messages"]
 
     # For chitchat, use history for context
@@ -219,9 +248,13 @@ async def generate_response(state: JarvisState) -> JarvisState:
     # Format memory facts
     memory_str = "\n".join([f"- {fact}" for fact in memory_facts]) if memory_facts else "Nessun fatto memorizzato"
 
+    # Format entity context
+    entity_str = knowledge_graph.format_entity_context(entity_context) if entity_context else "Nessuna entita conosciuta"
+
     # Build system prompt
     system_prompt = JARVIS_SYSTEM_PROMPT.format(
         memory_facts=memory_str,
+        entity_context=entity_str,
         agent_data=agent_data_str
     )
 
@@ -255,8 +288,23 @@ async def _safe_extract_facts(user_id: str, messages: list[dict]):
             logger.error(f"Background fact extraction failed for user {user_id}: {e}")
 
 
+async def _safe_extract_entities(user_id: str, messages: list[dict]):
+    """Safely extract entities with error handling and concurrency control."""
+    async with _fact_extraction_semaphore:
+        try:
+            result = await knowledge_graph.extract_and_store_entities(user_id, messages)
+            if result["entities_created"] or result["relationships_created"]:
+                logger.info(
+                    f"KG extraction: {len(result['entities_created'])} entities created, "
+                    f"{len(result['entities_updated'])} updated, "
+                    f"{len(result['relationships_created'])} relationships"
+                )
+        except Exception as e:
+            logger.error(f"Background entity extraction failed for user {user_id}: {e}")
+
+
 async def extract_facts(state: JarvisState) -> JarvisState:
-    """Extract facts from conversation to save in memory."""
+    """Extract facts and entities from conversation to save in memory."""
     user_id = state["user_id"]
     messages = state["messages"]
 
@@ -269,6 +317,9 @@ async def extract_facts(state: JarvisState) -> JarvisState:
 
         # Extract and save facts (async with error handling)
         asyncio.create_task(_safe_extract_facts(user_id, recent_messages))
+
+        # Extract and save entities to knowledge graph (async with error handling)
+        asyncio.create_task(_safe_extract_entities(user_id, recent_messages))
 
     return state
 
@@ -336,6 +387,7 @@ async def process_message(user_id: str, message: str, history: list = None) -> s
         "agent_results": {},
         "needs_refresh": {},
         "memory_context": [],
+        "entity_context": [],
         "final_response": None,
         "response_generated": False
     }

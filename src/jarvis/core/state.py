@@ -32,6 +32,7 @@ class JarvisState(TypedDict):
 
     # Memory
     memory_context: list[str]  # Retrieved facts
+    entity_context: list[dict]  # Retrieved entities from knowledge graph
 
     # Output
     final_response: Optional[str]
@@ -48,6 +49,7 @@ INTENT_CATEGORIES = {
     "web_scrape": ["web"],
     "rag_query": ["rag"],
     "rag_ingest": ["rag"],
+    "kg_query": ["kg"],  # Knowledge graph queries (people, relationships)
     "chitchat": [],  # No agents needed
     "complex": [],   # Fallback - planner will determine agents
     "planned": [],   # Agents determined by LLM planner

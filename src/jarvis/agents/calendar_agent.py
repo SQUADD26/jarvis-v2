@@ -8,6 +8,8 @@ from jarvis.agents.base import BaseAgent
 from jarvis.core.state import JarvisState
 from jarvis.integrations.google_calendar import calendar_client
 from jarvis.integrations.gemini import gemini
+from jarvis.integrations.openai_embeddings import openai_embeddings
+from jarvis.db.kg_repository import KGEntityRepository, KGAliasRepository
 
 # Tool definitions for the LLM
 CALENDAR_TOOLS = [
@@ -115,9 +117,67 @@ class CalendarAgent(BaseAgent):
     name = "calendar"
     resource_type = "calendar"
 
+    async def _enrich_entities_from_events(self, user_id: str, events: list[dict]) -> None:
+        """Extract person entities from calendar event attendees (background task)."""
+        try:
+            for event in events:
+                attendees = event.get("attendees", [])
+                event_title = event.get("title", "")
+                event_id = event.get("id")
+
+                for email in attendees:
+                    if not email or "@" not in email:
+                        continue
+
+                    # Skip own email (usually ends with user's domain)
+                    # Extract name from email if possible
+                    local_part = email.split("@")[0]
+
+                    # Convert email local part to name (e.g., "mario.rossi" -> "Mario Rossi")
+                    name_parts = local_part.replace(".", " ").replace("_", " ").replace("-", " ").split()
+                    canonical_name = " ".join(p.capitalize() for p in name_parts)
+
+                    # Skip if name is too short or generic
+                    if len(canonical_name) < 3 or canonical_name.lower() in ["info", "support", "admin", "noreply", "no-reply"]:
+                        continue
+
+                    # Generate embedding for the entity (OpenAI 3072-dim)
+                    embedding = await openai_embeddings.embed(canonical_name)
+
+                    # Try to create entity (will fail silently if exists)
+                    entity = await KGEntityRepository.create_entity(
+                        user_id=user_id,
+                        canonical_name=canonical_name,
+                        entity_type="person",
+                        properties={"email": email, "source": "calendar"},
+                        embedding=embedding,
+                        confidence=0.6,  # Lower confidence from calendar extraction
+                        source_type="calendar",
+                        source_id=event_id
+                    )
+
+                    if entity:
+                        # Add email as alias
+                        await KGAliasRepository.add_alias(entity["id"], email, confidence=0.9)
+                        # Add local part as alias
+                        await KGAliasRepository.add_alias(entity["id"], local_part, confidence=0.7)
+                        self.logger.debug(f"Created entity from calendar: {canonical_name}")
+                    else:
+                        # Entity already exists, try to update mention
+                        existing = await KGEntityRepository.get_entity_by_name(user_id, canonical_name, "person")
+                        if existing:
+                            await KGEntityRepository.update_mention(existing["id"])
+                            # Ensure email is added as alias
+                            await KGAliasRepository.add_alias(existing["id"], email, confidence=0.9)
+
+        except Exception as e:
+            self.logger.warning(f"Failed to enrich entities from calendar: {e}")
+
     async def _execute(self, state: JarvisState) -> Any:
         """Execute calendar operations using LLM reasoning."""
         user_input = state["current_input"]
+        user_id = state["user_id"]
+        self._current_user_id = user_id  # Store for tool methods
 
         # Get current date info
         now = datetime.now()
@@ -204,11 +264,12 @@ class CalendarAgent(BaseAgent):
 
     async def _execute_tool(self, tool_name: str, params: dict) -> dict:
         """Execute the selected tool with given parameters."""
+        user_id = getattr(self, "_current_user_id", None)
 
         if tool_name == "get_events":
-            return await self._tool_get_events(params)
+            return await self._tool_get_events(params, user_id)
         elif tool_name == "search_events":
-            return await self._tool_search_events(params)
+            return await self._tool_search_events(params, user_id)
         elif tool_name == "create_event":
             return await self._tool_create_event(params)
         elif tool_name == "update_event":
@@ -220,7 +281,7 @@ class CalendarAgent(BaseAgent):
         else:
             return {"error": f"Tool sconosciuto: {tool_name}"}
 
-    async def _tool_get_events(self, params: dict) -> dict:
+    async def _tool_get_events(self, params: dict, user_id: str = None) -> dict:
         """Get calendar events."""
         try:
             start_date = params.get("start_date")
@@ -233,6 +294,10 @@ class CalendarAgent(BaseAgent):
 
             events = calendar_client.get_events(start=start, end=end)
 
+            # Enrich KG with attendees (background task)
+            if events and user_id:
+                asyncio.create_task(self._enrich_entities_from_events(user_id, events))
+
             return {
                 "operation": "get_events",
                 "period": f"{start_date} {start_time} - {end_date} {end_time}",
@@ -243,7 +308,7 @@ class CalendarAgent(BaseAgent):
             self.logger.error(f"get_events failed: {e}")
             return {"error": f"Errore nel recupero eventi: {str(e)}"}
 
-    async def _tool_search_events(self, params: dict) -> dict:
+    async def _tool_search_events(self, params: dict, user_id: str = None) -> dict:
         """Search events by title/keyword."""
         try:
             query = params.get("query", "").lower()
@@ -266,6 +331,10 @@ class CalendarAgent(BaseAgent):
                 description = (event.get("description") or "").lower()
                 if query in title or query in description:
                     matching.append(event)
+
+            # Enrich KG with attendees from matching events (background task)
+            if matching and user_id:
+                asyncio.create_task(self._enrich_entities_from_events(user_id, matching))
 
             return {
                 "operation": "search_events",
