@@ -10,6 +10,10 @@ from jarvis.integrations.google_calendar import calendar_client
 from jarvis.integrations.gemini import gemini
 from jarvis.integrations.openai_embeddings import openai_embeddings
 from jarvis.db.kg_repository import KGEntityRepository, KGAliasRepository
+from jarvis.db.redis_client import redis_client
+
+# Confirmation phrases that indicate user wants to proceed with pending action
+CONFIRMATION_PHRASES = {"sì", "si", "yes", "ok", "procedi", "vai", "conferma", "fallo", "proceed", "confermo"}
 
 # Tool definitions for the LLM
 CALENDAR_TOOLS = [
@@ -116,11 +120,10 @@ PARTECIPANTI:
 - Se l'utente parla al futuro senza data, usa {tomorrow}
 
 ⚠️ MODIFICHE/ELIMINAZIONI - WORKFLOW OBBLIGATORIO:
-- "spostalo", "cambia orario", "modifica", "elimina" → HAI BISOGNO dell'event_id
-- Se dal CONTESTO CONVERSAZIONE vedi un evento appena creato/menzionato:
-  1. Usa search_events per trovare l'ID dell'evento
-  2. POI usa update_event o delete_event con l'ID trovato
-- DEVI SEMPRE restituire PRIMA search_events, poi l'update/delete
+- "spostalo", "cambia orario", "modifica", "elimina" → RESTITUISCI ARRAY con 2 operazioni:
+  1. search_events per trovare l'evento
+  2. update_event o delete_event con event_id: "FOUND_EVENT_ID" (placeholder)
+- Il sistema eseguirà search prima, poi sostituirà il placeholder con l'ID reale
 - "sistema", "correggi", "elimina duplicati" → PRIMA fai get_events per vedere cosa c'è
 
 ⚠️ EVITA DUPLICATI:
@@ -140,8 +143,8 @@ ESEMPI (NOTA: mai chiedere conferme, usa i default):
 - "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD", "start_time": "15:00", "end_time": "17:00"}}}}
 - "mettimi un evento alle 10" → {{"tool": "create_event", "params": {{"title": "Evento", "date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}
   ↑ NOTA: nessuna durata = 1 ora, nessun titolo specifico = "Evento"
-- "spostalo alle 13" (dopo aver creato "evento di test") → {{"tool": "search_events", "params": {{"query": "evento di test"}}}}
-  ↑ NOTA: PRIMA cerca l'evento per ottenere l'ID, POI riceverai i risultati e potrai fare update_event
+- "spostalo alle 13" (dopo aver creato "evento di test") → [{{"tool": "search_events", "params": {{"query": "evento di test"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "13:00", "end_time": "14:00"}}}}]
+  ↑ NOTA: array con search + update. Il sistema sostituisce FOUND_EVENT_ID con l'ID reale
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -233,12 +236,41 @@ class CalendarAgent(BaseAgent):
         except Exception as e:
             self.logger.warning(f"Failed to enrich entities from calendar: {e}")
 
+    async def _save_pending_action(self, user_id: str, action: dict) -> None:
+        """Save a pending action for later confirmation."""
+        key = f"calendar_pending:{user_id}"
+        await redis_client.set(key, json.dumps(action), ex=300)  # 5 min expiry
+        self.logger.info(f"Saved pending action for {user_id}: {action.get('action')}")
+
+    async def _get_pending_action(self, user_id: str) -> dict | None:
+        """Get and clear pending action."""
+        key = f"calendar_pending:{user_id}"
+        data = await redis_client.get(key)
+        if data:
+            await redis_client.delete(key)
+            return json.loads(data)
+        return None
+
+    def _is_confirmation(self, text: str) -> bool:
+        """Check if user input is a confirmation."""
+        return text.strip().lower() in CONFIRMATION_PHRASES
+
     async def _execute(self, state: JarvisState) -> Any:
         """Execute calendar operations using LLM reasoning."""
         user_input = state["current_input"]
         user_id = state["user_id"]
         messages = state.get("messages", [])
         self._current_user_id = user_id  # Store for tool methods
+
+        # Check for pending action if user is confirming
+        if self._is_confirmation(user_input):
+            pending = await self._get_pending_action(user_id)
+            if pending:
+                self.logger.info(f"Executing pending action: {pending.get('action')}")
+                if pending.get("action") == "update_event":
+                    return await self._tool_update_event(pending.get("params", {}))
+                elif pending.get("action") == "delete_event":
+                    return await self._tool_delete_event(pending.get("params", {}))
 
         # Build conversation context from recent messages (for follow-up understanding)
         conversation_context = ""
@@ -305,23 +337,58 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
 
             # Handle both single and multiple tool calls
             if isinstance(decision, list):
-                # Deduplicate tool calls to prevent duplicates
+                # Check for search→update/delete pattern (sequential workflow)
+                if len(decision) >= 2:
+                    first_tool = decision[0].get("tool")
+                    second_tool = decision[1].get("tool") if len(decision) > 1 else None
+
+                    # Sequential workflow: search first, then update/delete with found ID
+                    if first_tool in ("search_events", "get_events") and second_tool in ("update_event", "delete_event"):
+                        self.logger.info(f"Calendar agent: sequential workflow {first_tool} → {second_tool}")
+
+                        # Execute search first
+                        search_params = decision[0].get("params", {})
+                        self.logger.info(f"Calendar agent decision: {first_tool} with {search_params}")
+                        search_result = await self._execute_tool(first_tool, search_params)
+
+                        # Get event ID from search results
+                        events = search_result.get("events", [])
+                        if not events:
+                            return {
+                                "operation": "search_then_update",
+                                "search_result": search_result,
+                                "error": "Nessun evento trovato da modificare"
+                            }
+
+                        # Use first matching event's ID
+                        found_event_id = events[0].get("id")
+                        found_event_title = events[0].get("title", "evento")
+
+                        # Replace placeholder in update/delete params
+                        action_params = decision[1].get("params", {}).copy()
+                        if action_params.get("event_id") == "FOUND_EVENT_ID":
+                            action_params["event_id"] = found_event_id
+
+                        # Execute update/delete
+                        self.logger.info(f"Calendar agent decision: {second_tool} with {action_params}")
+                        action_result = await self._execute_tool(second_tool, action_params)
+
+                        return {
+                            "operation": f"search_then_{second_tool}",
+                            "found_event": found_event_title,
+                            "action_result": action_result
+                        }
+
+                # Deduplicate and execute remaining calls in parallel
                 seen = set()
                 unique_calls = []
                 for call in decision:
-                    # Create a unique key for each call
                     call_key = json.dumps(call, sort_keys=True)
                     if call_key not in seen:
                         seen.add(call_key)
                         unique_calls.append(call)
-                    else:
-                        self.logger.warning(f"Skipping duplicate tool call: {call}")
 
-                if len(unique_calls) != len(decision):
-                    self.logger.warning(f"Removed {len(decision) - len(unique_calls)} duplicate tool calls")
-
-                # Multiple tool calls - execute in parallel
-                self.logger.info(f"Calendar agent: {len(unique_calls)} unique tool calls to execute")
+                self.logger.info(f"Calendar agent: {len(unique_calls)} tool calls to execute in parallel")
                 tasks = []
                 for call in unique_calls:
                     tool_name = call.get("tool")
@@ -330,7 +397,6 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
                     tasks.append(self._execute_tool(tool_name, params))
 
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                # Convert exceptions to error dicts
                 processed_results = []
                 for r in results:
                     if isinstance(r, Exception):
