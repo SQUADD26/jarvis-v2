@@ -175,7 +175,7 @@ JSON:"""
 
 class CalendarAgent(BaseAgent):
     name = "calendar"
-    resource_type = "calendar"
+    resource_type = None  # Disable caching - every request needs LLM interpretation
 
     async def _enrich_entities_from_events(self, user_id: str, events: list[dict]) -> None:
         """Extract person entities from calendar event attendees (background task)."""
