@@ -87,18 +87,23 @@ REGOLE:
 1. Analizza la richiesta e decidi quali tool usare
 2. Calcola le date corrette (es: "domani" = {tomorrow}, "lunedì prossimo" = calcola)
 3. Se la richiesta contiene MULTIPLE OPERAZIONI DISTINTE (es: "fissa un appuntamento alle 10 e uno alle 14"), restituisci una LISTA di tool calls
-4. Per MODIFICARE o ELIMINARE un evento:
-   - Se l'utente fornisce il nome/titolo dell'evento, usa PRIMA search_events per trovare l'ID
-   - Poi usa update_event o delete_event con l'ID trovato
+
+⚠️ REGOLE CRITICHE PER MODIFICHE/ELIMINAZIONI:
+- Per MODIFICARE, ELIMINARE o SISTEMARE eventi DEVI PRIMA conoscere gli event_id
+- Se non hai gli event_id, usa get_events o search_events per trovarli
+- SOLO DOPO aver ricevuto i risultati con gli ID potrai procedere con delete_event o update_event
+- Se l'utente chiede di "sistemare", "correggere" o "eliminare duplicati":
+  1. PRIMA fai get_events PER LA DATA CORRETTA (se dice "domani" usa {tomorrow})
+  2. POI in un secondo momento riceverai i risultati e potrai decidere cosa eliminare
+- ⚠️ ATTENZIONE ALLE DATE: se l'utente parla di "domani", la ricerca deve essere per {tomorrow}, NON per {today}
 
 ⚠️ REGOLE CRITICHE - EVITA DUPLICATI:
 - Ogni operazione va eseguita UNA SOLA VOLTA
 - Se l'utente chiede "fissa appuntamento alle 10 con X e alle 14 con Y" → sono ESATTAMENTE 2 create_event, NON di più
 - NON ripetere la stessa operazione più volte
 - Conta attentamente quanti eventi/operazioni l'utente sta chiedendo
-- "e" o "," separano operazioni DIVERSE, non duplicano la stessa
 
-5. Rispondi SOLO con un JSON valido. Formato:
+4. Rispondi SOLO con un JSON valido. Formato:
    - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
    - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
 
@@ -108,9 +113,36 @@ ESEMPI:
 - "fissami appuntamento alle 10 con Mario e alle 14 con Luigi" → ESATTAMENTE 2 eventi:
   [{{"tool": "create_event", "params": {{"title": "Appuntamento con Mario", "date": "{tomorrow}", "start_time": "10:00", "end_time": "11:00"}}}},
    {{"tool": "create_event", "params": {{"title": "Appuntamento con Luigi", "date": "{tomorrow}", "start_time": "14:00", "end_time": "15:00"}}}}]
-- "sposta la riunione con Mario alle 16" → {{"tool": "search_events", "params": {{"query": "Mario"}}}}
+- "elimina duplicati e lascia solo X alle 10" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
 
 Rispondi SOLO con il JSON, nient'altro."""
+
+# Prompt for follow-up after getting search/get results
+FOLLOWUP_PROMPT = """Sei un agente calendario. Hai appena eseguito una ricerca e questi sono i risultati.
+
+⚠️ DATE IMPORTANTI - FAI ATTENZIONE:
+- OGGI: {today}
+- DOMANI: {tomorrow}
+- GIORNO DELLA SETTIMANA: {weekday}
+
+RICHIESTA ORIGINALE DELL'UTENTE:
+{original_request}
+
+RISULTATI DELLA RICERCA:
+{search_results}
+
+Ora, basandoti sui risultati, decidi quali operazioni eseguire.
+Per eliminare o modificare eventi, usa gli event_id mostrati nei risultati.
+
+TOOL DISPONIBILI:
+{tools}
+
+Rispondi SOLO con un JSON valido:
+- Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
+- Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, ...]
+- Nessuna azione necessaria: {{"tool": "none", "message": "spiegazione"}}
+
+JSON:"""
 
 
 class CalendarAgent(BaseAgent):
