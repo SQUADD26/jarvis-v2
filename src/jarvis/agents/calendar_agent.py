@@ -115,9 +115,12 @@ PARTECIPANTI:
 - "lunedì prossimo" = calcola la data corretta
 - Se l'utente parla al futuro senza data, usa {tomorrow}
 
-⚠️ MODIFICHE/ELIMINAZIONI:
-- Per MODIFICARE o ELIMINARE → DEVI PRIMA avere l'event_id
-- Se non hai l'ID → usa get_events o search_events PRIMA
+⚠️ MODIFICHE/ELIMINAZIONI - WORKFLOW OBBLIGATORIO:
+- "spostalo", "cambia orario", "modifica", "elimina" → HAI BISOGNO dell'event_id
+- Se dal CONTESTO CONVERSAZIONE vedi un evento appena creato/menzionato:
+  1. Usa search_events per trovare l'ID dell'evento
+  2. POI usa update_event o delete_event con l'ID trovato
+- DEVI SEMPRE restituire PRIMA search_events, poi l'update/delete
 - "sistema", "correggi", "elimina duplicati" → PRIMA fai get_events per vedere cosa c'è
 
 ⚠️ EVITA DUPLICATI:
@@ -137,6 +140,8 @@ ESEMPI (NOTA: mai chiedere conferme, usa i default):
 - "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD", "start_time": "15:00", "end_time": "17:00"}}}}
 - "mettimi un evento alle 10" → {{"tool": "create_event", "params": {{"title": "Evento", "date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}
   ↑ NOTA: nessuna durata = 1 ora, nessun titolo specifico = "Evento"
+- "spostalo alle 13" (dopo aver creato "evento di test") → {{"tool": "search_events", "params": {{"query": "evento di test"}}}}
+  ↑ NOTA: PRIMA cerca l'evento per ottenere l'ID, POI riceverai i risultati e potrai fare update_event
 
 Rispondi SOLO con il JSON, nient'altro."""
 

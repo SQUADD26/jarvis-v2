@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     cache_ttl_web: int = 3600      # 1 ora
 
     # LLM
-    default_model: str = "gemini-2.0-flash"
+    default_model: str = "gemini-2.5-flash"  # Upgraded from 2.0
     powerful_model: str = "gemini-2.5-pro-preview-05-06"
 
     # Jarvis API (for voice client communication)
