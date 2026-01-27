@@ -128,10 +128,18 @@ PARTECIPANTI:
 
 ⚠️ MODIFICHE/ELIMINAZIONI - WORKFLOW OBBLIGATORIO:
 - "spostalo", "cambia orario", "modifica", "elimina" → RESTITUISCI ARRAY con 2 operazioni:
-  1. search_events per trovare l'evento
+  1. get_events o search_events per trovare l'evento
   2. update_event o delete_event con event_id: "FOUND_EVENT_ID" (placeholder)
-- Il sistema eseguirà search prima, poi sostituirà il placeholder con l'ID reale
+- Il sistema eseguirà la ricerca prima, poi sostituirà il placeholder con l'ID reale
 - "sistema", "correggi", "elimina duplicati" → PRIMA fai get_events per vedere cosa c'è
+
+🎯 USA IL CONTESTO PER LA DATA:
+- Se dal contesto conversazione SAI che l'evento è in una data specifica, usa get_events con quella data!
+- Quando usi get_events + delete/update, aggiungi "match_title" per identificare l'evento giusto
+- Es: "cancella l'evento vertua di lunedì 2 febbraio" →
+  [{{"tool": "get_events", "params": {{"start_date": "2026-02-02", "end_date": "2026-02-02"}}}},
+   {{"tool": "delete_event", "params": {{"event_id": "FOUND_EVENT_ID", "match_title": "vertua"}}}}]
+- NON fare search_events con titolo approssimativo se conosci la data esatta!
 
 ⚠️ EVITA DUPLICATI:
 - Ogni operazione UNA SOLA VOLTA
@@ -376,12 +384,30 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
                             i += 2
                             continue
 
-                        # Use first matching event's ID
-                        found_event_id = events[0].get("id")
-                        found_event_title = events[0].get("title", "evento")
+                        # Find matching event - use match_title hint if provided
+                        action_params = decision[i + 1].get("params", {}).copy()
+                        match_title = action_params.pop("match_title", None)  # Remove from params after reading
+
+                        found_event = None
+                        if match_title and len(events) > 1:
+                            # Try to find event by title hint
+                            match_lower = match_title.lower()
+                            for ev in events:
+                                ev_title = (ev.get("title") or "").lower()
+                                # Match if any significant word from match_title is in event title
+                                match_words = [w for w in match_lower.split() if len(w) > 2]
+                                if any(w in ev_title for w in match_words):
+                                    found_event = ev
+                                    break
+
+                        # Fall back to first event
+                        if not found_event:
+                            found_event = events[0]
+
+                        found_event_id = found_event.get("id")
+                        found_event_title = found_event.get("title", "evento")
 
                         # Replace placeholder in update/delete params
-                        action_params = decision[i + 1].get("params", {}).copy()
                         if action_params.get("event_id") == "FOUND_EVENT_ID":
                             action_params["event_id"] = found_event_id
 
@@ -489,26 +515,13 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             # Get all events in range
             all_events = calendar_client.get_events(start=start, end=end, max_results=100)
 
-            # Filter by query - fuzzy word matching
-            # Split query into words and match if most words are found
-            query_words = [w for w in query.split() if len(w) > 2]  # Ignore short words
+            # Filter by query (search in title and description)
             matching = []
             for event in all_events:
                 title = (event.get("title") or "").lower()
                 description = (event.get("description") or "").lower()
-                combined = f"{title} {description}"
-
-                # Exact substring match (original behavior)
                 if query in title or query in description:
                     matching.append(event)
-                    continue
-
-                # Fuzzy: count how many query words appear in the event
-                if query_words:
-                    matches = sum(1 for w in query_words if w in combined)
-                    # Match if at least 50% of words found (min 1 word)
-                    if matches >= max(1, len(query_words) // 2):
-                        matching.append(event)
 
             # Enrich KG with attendees from matching events (background task)
             if matching and user_id:
