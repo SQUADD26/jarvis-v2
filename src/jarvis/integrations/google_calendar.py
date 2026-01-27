@@ -54,9 +54,10 @@ class GoogleCalendarClient:
         description: str = None,
         location: str = None,
         attendees: list[str] = None,
+        add_meet: bool = False,
         calendar_id: str = "primary"
     ) -> dict:
-        """Create a new calendar event."""
+        """Create a new calendar event with optional Google Meet link."""
         event = {
             "summary": title,
             "start": {"dateTime": start.isoformat(), "timeZone": "Europe/Rome"},
@@ -70,10 +71,20 @@ class GoogleCalendarClient:
         if attendees:
             event["attendees"] = [{"email": a} for a in attendees]
 
+        # Add Google Meet if requested or if there are attendees
+        if add_meet or attendees:
+            event["conferenceData"] = {
+                "createRequest": {
+                    "requestId": f"meet-{start.timestamp()}-{hash(title)}",
+                    "conferenceSolutionKey": {"type": "hangoutsMeet"}
+                }
+            }
+
         result = self.service.events().insert(
             calendarId=calendar_id,
             body=event,
-            sendUpdates="all" if attendees else "none"
+            sendUpdates="all" if attendees else "none",
+            conferenceDataVersion=1 if (add_meet or attendees) else 0
         ).execute()
 
         return self._format_event(result)
@@ -183,6 +194,16 @@ class GoogleCalendarClient:
         start = event.get("start", {})
         end = event.get("end", {})
 
+        # Extract Google Meet link if present
+        meet_link = None
+        conference_data = event.get("conferenceData", {})
+        if conference_data:
+            entry_points = conference_data.get("entryPoints", [])
+            for ep in entry_points:
+                if ep.get("entryPointType") == "video":
+                    meet_link = ep.get("uri")
+                    break
+
         return {
             "id": event.get("id"),
             "title": event.get("summary", "No title"),
@@ -191,7 +212,8 @@ class GoogleCalendarClient:
             "description": event.get("description"),
             "location": event.get("location"),
             "attendees": [a.get("email") for a in event.get("attendees", [])],
-            "link": event.get("htmlLink")
+            "link": event.get("htmlLink"),
+            "meet_link": meet_link
         }
 
 

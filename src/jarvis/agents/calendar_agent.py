@@ -34,14 +34,16 @@ CALENDAR_TOOLS = [
     },
     {
         "name": "create_event",
-        "description": "Crea un nuovo evento nel calendario",
+        "description": "Crea un nuovo evento nel calendario. Può invitare partecipanti e aggiungere Google Meet.",
         "parameters": {
-            "title": "Titolo dell'evento",
+            "title": "Titolo dell'evento (se non specificato, inferisci dal contesto es. 'Meeting con Mario')",
             "date": "Data in formato YYYY-MM-DD",
             "start_time": "Ora inizio in formato HH:MM",
-            "end_time": "Ora fine in formato HH:MM",
+            "end_time": "Ora fine in formato HH:MM (se non specificata, aggiungi 1 ora a start_time)",
             "description": "Descrizione opzionale",
-            "location": "Luogo opzionale"
+            "location": "Luogo opzionale",
+            "attendees": "Lista email dei partecipanti separata da virgola (opzionale, es: 'mario@gmail.com,luigi@gmail.com')",
+            "add_meet": "Se true, aggiunge automaticamente un link Google Meet (default: true se ci sono attendees)"
         }
     },
     {
@@ -75,7 +77,7 @@ CALENDAR_TOOLS = [
     }
 ]
 
-AGENT_SYSTEM_PROMPT = """Sei un agente calendario. Il tuo compito è capire la richiesta dell'utente e chiamare i tool appropriati.
+AGENT_SYSTEM_PROMPT = """Sei un agente calendario intelligente. Capisci le richieste dell'utente e chiami i tool appropriati.
 
 OGGI: {today}
 GIORNO DELLA SETTIMANA: {weekday}
@@ -83,37 +85,47 @@ GIORNO DELLA SETTIMANA: {weekday}
 TOOL DISPONIBILI:
 {tools}
 
-REGOLE:
-1. Analizza la richiesta e decidi quali tool usare
-2. Calcola le date corrette (es: "domani" = {tomorrow}, "lunedì prossimo" = calcola)
-3. Se la richiesta contiene MULTIPLE OPERAZIONI DISTINTE (es: "fissa un appuntamento alle 10 e uno alle 14"), restituisci una LISTA di tool calls
+🧠 SII FURBO - INFERISCI AUTOMATICAMENTE:
+- Se l'utente dice "1h" o "un'ora" → end_time = start_time + 1 ora
+- Se l'utente dice "30 min" → end_time = start_time + 30 min
+- Se non specifica durata → default 1 ora
+- Se non specifica data → usa {today} o {tomorrow} in base al contesto
+- Se dice "con mario@email.com" → quello è un attendee, aggiungilo
+- Se fornisce un'email → è un partecipante, crea titolo tipo "Meeting con [nome da email]"
+- Se dice "call", "videocall", "meeting online" → add_meet = true
+- Se ci sono attendees → add_meet = true di default (meeting = videochiamata)
 
-⚠️ REGOLE CRITICHE PER MODIFICHE/ELIMINAZIONI:
-- Per MODIFICARE, ELIMINARE o SISTEMARE eventi DEVI PRIMA conoscere gli event_id
-- Se non hai gli event_id, usa get_events o search_events per trovarli
-- SOLO DOPO aver ricevuto i risultati con gli ID potrai procedere con delete_event o update_event
-- Se l'utente chiede di "sistemare", "correggere" o "eliminare duplicati":
-  1. PRIMA fai get_events PER LA DATA CORRETTA (se dice "domani" usa {tomorrow})
-  2. POI in un secondo momento riceverai i risultati e potrai decidere cosa eliminare
-- ⚠️ ATTENZIONE ALLE DATE: se l'utente parla di "domani", la ricerca deve essere per {tomorrow}, NON per {today}
+📧 GESTIONE PARTECIPANTI:
+- Estrai email da frasi tipo "con tizio@gmail.com" o "invita caio@email.it"
+- Se l'utente fornisce solo nome, NON inventare email
+- Più email separate da virgola: "mario@x.com,luigi@y.com"
 
-⚠️ REGOLE CRITICHE - EVITA DUPLICATI:
-- Ogni operazione va eseguita UNA SOLA VOLTA
-- Se l'utente chiede "fissa appuntamento alle 10 con X e alle 14 con Y" → sono ESATTAMENTE 2 create_event, NON di più
-- NON ripetere la stessa operazione più volte
-- Conta attentamente quanti eventi/operazioni l'utente sta chiedendo
+📅 REGOLE DATE:
+- "domani" = {tomorrow}
+- "oggi" = {today}
+- "lunedì prossimo" = calcola la data corretta
+- Se l'utente parla al futuro senza data, usa {tomorrow}
 
-4. Rispondi SOLO con un JSON valido. Formato:
-   - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
-   - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
+⚠️ MODIFICHE/ELIMINAZIONI:
+- Per MODIFICARE o ELIMINARE → DEVI PRIMA avere l'event_id
+- Se non hai l'ID → usa get_events o search_events PRIMA
+- "sistema", "correggi", "elimina duplicati" → PRIMA fai get_events per vedere cosa c'è
+
+⚠️ EVITA DUPLICATI:
+- Ogni operazione UNA SOLA VOLTA
+- "appuntamento alle 10 e alle 14" = ESATTAMENTE 2 create_event
+- NON ripetere la stessa operazione
+
+📝 OUTPUT FORMAT:
+Rispondi SOLO con JSON valido:
+- Singola: {{"tool": "nome", "params": {{...}}}}
+- Multiple: [{{"tool": "...", "params": {{...}}}}, ...]
 
 ESEMPI:
-- "cosa ho domani" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
+- "agenda domani" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
+- "crea evento alle 12 con test@gmail.com, 1h" → {{"tool": "create_event", "params": {{"title": "Meeting con Test", "date": "{today}", "start_time": "12:00", "end_time": "13:00", "attendees": "test@gmail.com", "add_meet": true}}}}
 - "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD", "start_time": "15:00", "end_time": "17:00"}}}}
-- "fissami appuntamento alle 10 con Mario e alle 14 con Luigi" → ESATTAMENTE 2 eventi:
-  [{{"tool": "create_event", "params": {{"title": "Appuntamento con Mario", "date": "{tomorrow}", "start_time": "10:00", "end_time": "11:00"}}}},
-   {{"tool": "create_event", "params": {{"title": "Appuntamento con Luigi", "date": "{tomorrow}", "start_time": "14:00", "end_time": "15:00"}}}}]
-- "elimina duplicati e lascia solo X alle 10" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
+- "videocall con mario@x.com domani alle 10" → {{"tool": "create_event", "params": {{"title": "Videocall con Mario", "date": "{tomorrow}", "start_time": "10:00", "end_time": "11:00", "attendees": "mario@x.com", "add_meet": true}}}}
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -380,7 +392,7 @@ class CalendarAgent(BaseAgent):
             return {"error": f"Errore nella ricerca eventi: {str(e)}"}
 
     async def _tool_create_event(self, params: dict) -> dict:
-        """Create a calendar event."""
+        """Create a calendar event with optional attendees and Google Meet."""
         try:
             date = params.get("date")
             start_time = params.get("start_time")
@@ -389,6 +401,22 @@ class CalendarAgent(BaseAgent):
 
             start = datetime.fromisoformat(f"{date}T{start_time}")
             end = datetime.fromisoformat(f"{date}T{end_time}")
+
+            # Parse attendees (comma-separated string to list)
+            attendees_raw = params.get("attendees", "")
+            attendees = None
+            if attendees_raw:
+                attendees = [e.strip() for e in attendees_raw.split(",") if e.strip() and "@" in e]
+
+            # Determine if we should add Google Meet
+            add_meet_param = params.get("add_meet")
+            if isinstance(add_meet_param, str):
+                add_meet = add_meet_param.lower() == "true"
+            elif isinstance(add_meet_param, bool):
+                add_meet = add_meet_param
+            else:
+                # Default: add meet if there are attendees
+                add_meet = bool(attendees)
 
             # Check for existing events at the same time to warn about potential conflicts
             existing_events = calendar_client.get_events(start=start, end=end)
@@ -399,36 +427,34 @@ class CalendarAgent(BaseAgent):
                 if title.lower() in ev_title or ev_title in title.lower():
                     conflicts.append(ev)
 
-            if conflicts:
-                self.logger.warning(f"Potential duplicate: {title} conflicts with {[c['title'] for c in conflicts]}")
-                # Return warning but still create the event (user might want it)
-                event = calendar_client.create_event(
-                    title=title,
-                    start=start,
-                    end=end,
-                    description=params.get("description"),
-                    location=params.get("location")
-                )
-                return {
-                    "operation": "create_event",
-                    "event": event,
-                    "warning": f"⚠️ Attenzione: esistono già eventi simili in questo orario: {[c['title'] for c in conflicts]}",
-                    "message": f"Evento '{event['title']}' creato per {date} {start_time}-{end_time}"
-                }
-
             event = calendar_client.create_event(
                 title=title,
                 start=start,
                 end=end,
                 description=params.get("description"),
-                location=params.get("location")
+                location=params.get("location"),
+                attendees=attendees,
+                add_meet=add_meet
             )
 
-            return {
+            # Build response message
+            message = f"Evento '{event['title']}' creato per {date} {start_time}-{end_time}"
+            if attendees:
+                message += f" con {len(attendees)} partecipanti"
+            if event.get("meet_link"):
+                message += f"\n📹 Meet: {event['meet_link']}"
+
+            result = {
                 "operation": "create_event",
                 "event": event,
-                "message": f"Evento '{event['title']}' creato per {date} {start_time}-{end_time}"
+                "message": message
             }
+
+            if conflicts:
+                self.logger.warning(f"Potential duplicate: {title} conflicts with {[c['title'] for c in conflicts]}")
+                result["warning"] = f"⚠️ Attenzione: esistono già eventi simili in questo orario: {[c['title'] for c in conflicts]}"
+
+            return result
         except Exception as e:
             self.logger.error(f"create_event failed: {e}")
             return {"error": f"Errore nella creazione evento: {str(e)}"}

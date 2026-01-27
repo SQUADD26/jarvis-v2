@@ -55,10 +55,10 @@ class Settings(BaseSettings):
     porcupine_access_key: str = Field(default="", alias="PORCUPINE_ACCESS_KEY")
     voice_mode: str = Field(default="ptt", alias="VOICE_MODE")  # "ptt" or "wake_word"
     voice_ptt_key: str = Field(default="<cmd>+j", alias="VOICE_PTT_KEY")
-    voice_sensitivity: float = Field(default=0.5, alias="VOICE_SENSITIVITY")
-    voice_silence_timeout: float = Field(default=2.0, alias="VOICE_SILENCE_TIMEOUT")
+    voice_sensitivity: float = Field(default=0.7, alias="VOICE_SENSITIVITY")  # Higher = more sensitive
+    voice_silence_timeout: float = Field(default=1.0, alias="VOICE_SILENCE_TIMEOUT")  # Faster response
     voice_max_recording: float = Field(default=30.0, alias="VOICE_MAX_RECORDING")
-    deepgram_tts_model: str = Field(default="aura-2-livia-it", alias="DEEPGRAM_TTS_MODEL")
+    deepgram_tts_model: str = Field(default="aura-2-thalia-en", alias="DEEPGRAM_TTS_MODEL")  # English voice
 
     # Crawl4AI
     crawl4ai_url: str = Field(default="http://srv938822.hstgr.cloud:11235", alias="CRAWL4AI_URL")
