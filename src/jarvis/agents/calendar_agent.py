@@ -1,4 +1,4 @@
-"""Calendar agent - LLM-powered with tool calling."""
+"""Calendar agent - LLM-powered with intelligent two-step workflow."""
 
 from datetime import datetime, timedelta
 from typing import Any
@@ -12,24 +12,19 @@ from jarvis.integrations.openai_embeddings import openai_embeddings
 from jarvis.db.kg_repository import KGEntityRepository, KGAliasRepository
 from jarvis.db.redis_client import redis_client
 
-# Confirmation phrases that indicate user wants to proceed with pending action
-CONFIRMATION_PHRASES = {"sì", "si", "yes", "ok", "procedi", "vai", "conferma", "fallo", "proceed", "confermo"}
-
 # Tool definitions for the LLM
 CALENDAR_TOOLS = [
     {
         "name": "get_events",
-        "description": "Recupera gli eventi del calendario in un periodo specifico",
+        "description": "Recupera gli eventi del calendario in un periodo specifico. USA QUESTO quando conosci la data dell'evento.",
         "parameters": {
             "start_date": "Data inizio in formato YYYY-MM-DD",
             "end_date": "Data fine in formato YYYY-MM-DD",
-            "start_time": "Ora inizio opzionale in formato HH:MM (default: 00:00)",
-            "end_time": "Ora fine opzionale in formato HH:MM (default: 23:59)"
         }
     },
     {
         "name": "search_events",
-        "description": "Cerca eventi per titolo/keyword. Utile per trovare l'ID di un evento prima di modificarlo o eliminarlo.",
+        "description": "Cerca eventi per titolo/keyword. USA QUESTO solo se NON conosci la data.",
         "parameters": {
             "query": "Testo da cercare nel titolo dell'evento",
             "start_date": "Data inizio ricerca (default: oggi)",
@@ -38,38 +33,36 @@ CALENDAR_TOOLS = [
     },
     {
         "name": "create_event",
-        "description": "Crea un nuovo evento nel calendario. Può invitare partecipanti e aggiungere Google Meet. Supporta eventi multi-giorno.",
+        "description": "Crea un nuovo evento. Supporta eventi multi-giorno.",
         "parameters": {
-            "title": "Titolo dell'evento (se non specificato, inferisci dal contesto es. 'Meeting con Mario')",
+            "title": "Titolo dell'evento",
             "start_date": "Data inizio in formato YYYY-MM-DD",
-            "end_date": "Data fine in formato YYYY-MM-DD (opzionale, se diversa da start_date per eventi multi-giorno)",
+            "end_date": "Data fine in formato YYYY-MM-DD (opzionale, per eventi multi-giorno)",
             "start_time": "Ora inizio in formato HH:MM",
-            "end_time": "Ora fine in formato HH:MM (se non specificata, aggiungi 1 ora a start_time)",
+            "end_time": "Ora fine in formato HH:MM",
             "description": "Descrizione opzionale",
             "location": "Luogo opzionale",
-            "attendees": "Lista email dei partecipanti separata da virgola (opzionale, es: 'mario@gmail.com,luigi@gmail.com')",
-            "add_meet": "Se true, aggiunge automaticamente un link Google Meet (default: true se ci sono attendees)"
+            "attendees": "Email partecipanti separati da virgola (opzionale)",
+            "add_meet": "true per aggiungere Google Meet"
         }
     },
     {
         "name": "update_event",
-        "description": "Modifica un evento esistente. Richiede l'event_id (usa search_events per trovarlo). Supporta eventi multi-giorno.",
+        "description": "Modifica un evento esistente. RICHIEDE event_id reale (non placeholder).",
         "parameters": {
-            "event_id": "ID dell'evento da modificare",
+            "event_id": "ID dell'evento (es: 'abc123xyz')",
             "title": "Nuovo titolo (opzionale)",
-            "start_date": "Nuova data inizio in formato YYYY-MM-DD (opzionale)",
-            "end_date": "Nuova data fine in formato YYYY-MM-DD (opzionale, per eventi multi-giorno)",
-            "start_time": "Nuova ora inizio in formato HH:MM (opzionale)",
-            "end_time": "Nuova ora fine in formato HH:MM (opzionale)",
-            "description": "Nuova descrizione (opzionale)",
-            "location": "Nuovo luogo (opzionale)"
+            "start_date": "Nuova data inizio (opzionale)",
+            "end_date": "Nuova data fine (opzionale)",
+            "start_time": "Nuova ora inizio (opzionale)",
+            "end_time": "Nuova ora fine (opzionale)"
         }
     },
     {
         "name": "delete_event",
-        "description": "Elimina un evento dal calendario. Richiede l'event_id (usa search_events per trovarlo).",
+        "description": "Elimina un evento. RICHIEDE event_id reale (non placeholder).",
         "parameters": {
-            "event_id": "ID dell'evento da eliminare"
+            "event_id": "ID dell'evento da eliminare (es: 'abc123xyz')"
         }
     },
     {
@@ -77,224 +70,174 @@ CALENDAR_TOOLS = [
         "description": "Trova slot liberi nel calendario",
         "parameters": {
             "duration_minutes": "Durata richiesta in minuti",
-            "start_date": "Data inizio ricerca in formato YYYY-MM-DD",
-            "end_date": "Data fine ricerca in formato YYYY-MM-DD"
+            "start_date": "Data inizio ricerca",
+            "end_date": "Data fine ricerca"
         }
     }
 ]
 
-AGENT_SYSTEM_PROMPT = """Sei un agente calendario intelligente. Capisci le richieste dell'utente e chiami i tool appropriati.
+AGENT_SYSTEM_PROMPT = """Sei un agente calendario INTELLIGENTE. Analizza le richieste e usa i tool appropriati.
 
-OGGI: {today}
-GIORNO DELLA SETTIMANA: {weekday}
+OGGI: {today} ({weekday})
+DOMANI: {tomorrow}
 
 TOOL DISPONIBILI:
 {tools}
 
-🧠 SII FURBO - INFERISCI E AGISCI, MAI CHIEDERE:
-⚠️ NON CHIEDERE MAI CONFERME! Usa i default e agisci subito.
+🧠 REGOLE FONDAMENTALI:
 
-DURATA (OBBLIGATORIO - USA SEMPRE QUESTI DEFAULT):
-- "1h", "un'ora" → end_time = start_time + 1 ora
-- "30 min", "mezz'ora" → end_time = start_time + 30 min
-- NESSUNA DURATA SPECIFICATA → USA 1 ORA DI DEFAULT (end_time = start_time + 1 ora)
-- MAI chiedere "quanto dura?" - USA IL DEFAULT!
+1. CREAZIONE EVENTI - Agisci subito, non chiedere conferme:
+   - Nessuna durata specificata → 1 ora di default
+   - Nessun titolo → "Evento" o inferisci dal contesto
+   - "da lunedì a giovedì" → usa start_date e end_date DIVERSI
+   - Email presente → add_meet = true
 
-DATA (OBBLIGATORIO):
-- Nessuna data specificata + ora futura oggi → usa {today}
-- Nessuna data specificata + ora passata oggi → usa {tomorrow}
-- "domani", "tomorrow" → {tomorrow}
+2. MODIFICA/ELIMINAZIONE - HAI BISOGNO DELL'event_id:
+   - Se NON hai l'event_id, devi PRIMA recuperare gli eventi
+   - Se conosci la DATA → usa get_events per quella data
+   - Se NON conosci la data → usa search_events
+   - Restituisci SOLO il tool di ricerca, il sistema ti mostrerà i risultati
 
-PARTECIPANTI:
-- "con mario@email.com" → attendee, titolo "Meeting con Mario"
-- Email presente → add_meet = true automaticamente
-- "call", "videocall", "meeting online" → add_meet = true
+3. QUANDO RESTITUIRE SOLO get_events o search_events:
+   - "cancella l'evento X" → get_events o search_events (per trovare l'ID)
+   - "sposta l'appuntamento di domani" → get_events per domani
+   - "elimina il meeting delle 10" → get_events per oggi
+   - Il sistema ti richiamerà con i risultati e potrai scegliere l'evento giusto
 
-📧 GESTIONE PARTECIPANTI:
-- Estrai email da frasi tipo "con tizio@gmail.com" o "invita caio@email.it"
-- Se l'utente fornisce solo nome, NON inventare email
-- Più email separate da virgola: "mario@x.com,luigi@y.com"
-
-📅 REGOLE DATE:
-- "domani" = {tomorrow}
+📅 DATE:
 - "oggi" = {today}
-- "lunedì prossimo" = calcola la data corretta
-- Se l'utente parla al futuro senza data, usa {tomorrow}
+- "domani" = {tomorrow}
+- "lunedì prossimo" = calcola la data
+- "2 febbraio" = 2026-02-02
 
-📅 EVENTI MULTI-GIORNO (IMPORTANTE):
-- "da mercoledì a sabato", "da X a Y" → USA start_date E end_date DIVERSI!
-- "blocca da lunedì 14 a giovedì 18" → start_date=lunedì, end_date=giovedì, start_time=14:00, end_time=18:00
-- NON usare mai "date" singolo per eventi che spannano più giorni!
-
-⚠️ MODIFICHE/ELIMINAZIONI - WORKFLOW OBBLIGATORIO:
-- "spostalo", "cambia orario", "modifica", "elimina" → RESTITUISCI ARRAY con 2 operazioni:
-  1. get_events o search_events per trovare l'evento
-  2. update_event o delete_event con event_id: "FOUND_EVENT_ID" (placeholder)
-- Il sistema eseguirà la ricerca prima, poi sostituirà il placeholder con l'ID reale
-- "sistema", "correggi", "elimina duplicati" → PRIMA fai get_events per vedere cosa c'è
-
-🎯 USA IL CONTESTO PER LA DATA:
-- Se dal contesto conversazione SAI che l'evento è in una data specifica, usa get_events con quella data!
-- Quando usi get_events + delete/update, aggiungi "match_title" per identificare l'evento giusto
-- Es: "cancella l'evento vertua di lunedì 2 febbraio" →
-  [{{"tool": "get_events", "params": {{"start_date": "2026-02-02", "end_date": "2026-02-02"}}}},
-   {{"tool": "delete_event", "params": {{"event_id": "FOUND_EVENT_ID", "match_title": "vertua"}}}}]
-- NON fare search_events con titolo approssimativo se conosci la data esatta!
-
-⚠️ EVITA DUPLICATI:
-- Ogni operazione UNA SOLA VOLTA
-- "appuntamento alle 10 e alle 14" = ESATTAMENTE 2 create_event
-- NON ripetere la stessa operazione
-
-📝 OUTPUT FORMAT:
-Rispondi SOLO con JSON valido:
+📝 OUTPUT: Solo JSON valido
 - Singola: {{"tool": "nome", "params": {{...}}}}
-- Multiple: [{{"tool": "...", "params": {{...}}}}, ...]
+- Multiple (solo per create_event multipli): [{{"tool": "create_event", ...}}, ...]
 
-ESEMPI (NOTA: mai chiedere conferme, usa i default):
+ESEMPI:
 - "agenda domani" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
-- "evento alle 12 con test@gmail.com" → {{"tool": "create_event", "params": {{"title": "Meeting con Test", "start_date": "{today}", "start_time": "12:00", "end_time": "13:00", "attendees": "test@gmail.com", "add_meet": true}}}}
-  ↑ NOTA: nessuna durata specificata = 1 ora di default (12:00-13:00)
-- "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "start_date": "YYYY-MM-DD", "start_time": "15:00", "end_time": "17:00"}}}}
-- "mettimi un evento alle 10" → {{"tool": "create_event", "params": {{"title": "Evento", "start_date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}
-  ↑ NOTA: nessuna durata = 1 ora, nessun titolo specifico = "Evento"
-- "blocca agenda da mercoledì 14 a sabato 20" → {{"tool": "create_event", "params": {{"title": "Occupato", "start_date": "2025-01-29", "end_date": "2025-02-01", "start_time": "14:00", "end_time": "20:00"}}}}
-  ↑ NOTA: evento multi-giorno usa start_date e end_date DIVERSI
-- "spostalo alle 13" (dopo aver creato "evento di test") → [{{"tool": "search_events", "params": {{"query": "evento di test"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "13:00", "end_time": "14:00"}}}}]
-  ↑ NOTA: array con search + update. Il sistema sostituisce FOUND_EVENT_ID con l'ID reale
-- "sposta X alle 14 e Y alle 17:30" → [{{"tool": "search_events", "params": {{"query": "X"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "14:00", "end_time": "15:00"}}}}, {{"tool": "search_events", "params": {{"query": "Y"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "17:30", "end_time": "18:30"}}}}]
-  ↑ NOTA: per operazioni MULTIPLE su eventi DIVERSI, metti TUTTE le coppie search+update nell'array
+- "crea evento alle 15" → {{"tool": "create_event", "params": {{"title": "Evento", "start_date": "{today}", "start_time": "15:00", "end_time": "16:00"}}}}
+- "blocca da mercoledì 14 a sabato 20" → {{"tool": "create_event", "params": {{"title": "Occupato", "start_date": "2026-01-29", "end_date": "2026-02-01", "start_time": "14:00", "end_time": "20:00"}}}}
+- "cancella l'evento vertua di lunedì 2 febbraio" → {{"tool": "get_events", "params": {{"start_date": "2026-02-02", "end_date": "2026-02-02"}}}}
+  (poi vedrai gli eventi e potrai eliminare quello giusto)
+- "elimina il pranzo di domani" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
+- "sposta il meeting X alle 14" → {{"tool": "search_events", "params": {{"query": "X"}}}}
 
-Rispondi SOLO con il JSON, nient'altro."""
+Rispondi SOLO con JSON."""
 
-# Prompt for follow-up after getting search/get results
-FOLLOWUP_PROMPT = """Sei un agente calendario. Hai appena eseguito una ricerca e questi sono i risultati.
+# Prompt for second step - after getting events
+FOLLOWUP_PROMPT = """Hai chiesto gli eventi e questi sono i risultati.
 
-⚠️ DATE IMPORTANTI - FAI ATTENZIONE:
-- OGGI: {today}
-- DOMANI: {tomorrow}
-- GIORNO DELLA SETTIMANA: {weekday}
+OGGI: {today} ({weekday})
+RICHIESTA ORIGINALE: {original_request}
 
-RICHIESTA ORIGINALE DELL'UTENTE:
-{original_request}
+EVENTI TROVATI:
+{events_list}
 
-RISULTATI DELLA RICERCA:
-{search_results}
-
-Ora, basandoti sui risultati, decidi quali operazioni eseguire.
-Per eliminare o modificare eventi, usa gli event_id mostrati nei risultati.
+Ora scegli l'evento corretto e esegui l'azione richiesta.
+Usa l'event_id REALE mostrato sopra (NON inventare ID, NON usare placeholder).
 
 TOOL DISPONIBILI:
 {tools}
 
-Rispondi SOLO con un JSON valido:
-- Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
-- Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, ...]
-- Nessuna azione necessaria: {{"tool": "none", "message": "spiegazione"}}
+Se l'utente voleva:
+- Eliminare → {{"tool": "delete_event", "params": {{"event_id": "ID_REALE_QUI"}}}}
+- Modificare → {{"tool": "update_event", "params": {{"event_id": "ID_REALE_QUI", ...}}}}
+- Solo vedere → {{"tool": "none", "message": "Ecco gli eventi"}}
 
-JSON:"""
+Se ci sono PIÙ eventi che potrebbero corrispondere, scegli quello più probabile basandoti su:
+- Titolo (quale assomiglia di più alla richiesta?)
+- Orario (se l'utente ha menzionato un'ora)
+- Contesto della conversazione
+
+Rispondi SOLO con JSON."""
 
 
 class CalendarAgent(BaseAgent):
     name = "calendar"
-    resource_type = None  # Disable caching - every request needs LLM interpretation
+    resource_type = None  # Disable caching
 
     async def _enrich_entities_from_events(self, user_id: str, events: list[dict]) -> None:
         """Extract person entities from calendar event attendees (background task)."""
         try:
             for event in events:
                 attendees = event.get("attendees", [])
-                event_title = event.get("title", "")
                 event_id = event.get("id")
 
                 for email in attendees:
                     if not email or "@" not in email:
                         continue
 
-                    # Skip own email (usually ends with user's domain)
-                    # Extract name from email if possible
                     local_part = email.split("@")[0]
-
-                    # Convert email local part to name (e.g., "mario.rossi" -> "Mario Rossi")
                     name_parts = local_part.replace(".", " ").replace("_", " ").replace("-", " ").split()
                     canonical_name = " ".join(p.capitalize() for p in name_parts)
 
-                    # Skip if name is too short or generic
-                    if len(canonical_name) < 3 or canonical_name.lower() in ["info", "support", "admin", "noreply", "no-reply"]:
+                    if len(canonical_name) < 3 or canonical_name.lower() in ["info", "support", "admin", "noreply"]:
                         continue
 
-                    # Generate embedding for the entity (OpenAI 3072-dim)
                     embedding = await openai_embeddings.embed(canonical_name)
-
-                    # Try to create entity (will fail silently if exists)
                     entity = await KGEntityRepository.create_entity(
                         user_id=user_id,
                         canonical_name=canonical_name,
                         entity_type="person",
                         properties={"email": email, "source": "calendar"},
                         embedding=embedding,
-                        confidence=0.6,  # Lower confidence from calendar extraction
+                        confidence=0.6,
                         source_type="calendar",
                         source_id=event_id
                     )
 
                     if entity:
-                        # Add email as alias
                         await KGAliasRepository.add_alias(entity["id"], email, confidence=0.9)
-                        # Add local part as alias
                         await KGAliasRepository.add_alias(entity["id"], local_part, confidence=0.7)
-                        self.logger.debug(f"Created entity from calendar: {canonical_name}")
                     else:
-                        # Entity already exists, try to update mention
                         existing = await KGEntityRepository.get_entity_by_name(user_id, canonical_name, "person")
                         if existing:
                             await KGEntityRepository.update_mention(existing["id"])
-                            # Ensure email is added as alias
                             await KGAliasRepository.add_alias(existing["id"], email, confidence=0.9)
 
         except Exception as e:
-            self.logger.warning(f"Failed to enrich entities from calendar: {e}")
+            self.logger.warning(f"Failed to enrich entities: {e}")
 
-    async def _save_pending_action(self, user_id: str, action: dict) -> None:
-        """Save a pending action for later confirmation."""
-        key = f"calendar_pending:{user_id}"
-        await redis_client.set(key, json.dumps(action), ex=300)  # 5 min expiry
-        self.logger.info(f"Saved pending action for {user_id}: {action.get('action')}")
+    def _format_events_for_llm(self, events: list[dict]) -> str:
+        """Format events list for LLM consumption with clear IDs."""
+        if not events:
+            return "Nessun evento trovato."
 
-    async def _get_pending_action(self, user_id: str) -> dict | None:
-        """Get and clear pending action."""
-        key = f"calendar_pending:{user_id}"
-        data = await redis_client.get(key)
-        if data:
-            await redis_client.delete(key)
-            return json.loads(data)
-        return None
+        lines = []
+        for ev in events:
+            event_id = ev.get("id", "???")
+            title = ev.get("title", "Senza titolo")
+            start = ev.get("start", "")
+            end = ev.get("end", "")
 
-    def _is_confirmation(self, text: str) -> bool:
-        """Check if user input is a confirmation."""
-        return text.strip().lower() in CONFIRMATION_PHRASES
+            # Format datetime nicely
+            if isinstance(start, str) and "T" in start:
+                start_dt = datetime.fromisoformat(start.replace("Z", "+00:00"))
+                start_str = start_dt.strftime("%d/%m %H:%M")
+            else:
+                start_str = str(start)
+
+            if isinstance(end, str) and "T" in end:
+                end_dt = datetime.fromisoformat(end.replace("Z", "+00:00"))
+                end_str = end_dt.strftime("%H:%M")
+            else:
+                end_str = str(end)
+
+            lines.append(f"- [{event_id}] \"{title}\" ({start_str}-{end_str})")
+
+        return "\n".join(lines)
 
     async def _execute(self, state: JarvisState) -> Any:
-        """Execute calendar operations using LLM reasoning."""
+        """Execute calendar operations with intelligent two-step workflow."""
         user_input = state["current_input"]
         user_id = state["user_id"]
         messages = state.get("messages", [])
-        self._current_user_id = user_id  # Store for tool methods
+        self._current_user_id = user_id
 
-        # Check for pending action if user is confirming
-        if self._is_confirmation(user_input):
-            pending = await self._get_pending_action(user_id)
-            if pending:
-                self.logger.info(f"Executing pending action: {pending.get('action')}")
-                if pending.get("action") == "update_event":
-                    return await self._tool_update_event(pending.get("params", {}))
-                elif pending.get("action") == "delete_event":
-                    return await self._tool_delete_event(pending.get("params", {}))
-
-        # Build conversation context from recent messages (for follow-up understanding)
+        # Build conversation context
         conversation_context = ""
         if len(messages) > 1:
-            # Get last 4 messages for context (excluding current)
             recent = messages[-5:-1] if len(messages) > 5 else messages[:-1]
             context_parts = []
             for msg in recent:
@@ -304,14 +247,13 @@ class CalendarAgent(BaseAgent):
             if context_parts:
                 conversation_context = "\n".join(context_parts)
 
-        # Get current date info
+        # Date info
         now = datetime.now()
         today = now.strftime("%Y-%m-%d")
         tomorrow = (now + timedelta(days=1)).strftime("%Y-%m-%d")
         weekday_names = ["Lunedì", "Martedì", "Mercoledì", "Giovedì", "Venerdì", "Sabato", "Domenica"]
         weekday = weekday_names[now.weekday()]
 
-        # Format tools for prompt
         tools_str = json.dumps(CALENDAR_TOOLS, indent=2, ensure_ascii=False)
 
         # Build prompt
@@ -322,20 +264,14 @@ class CalendarAgent(BaseAgent):
             tools=tools_str
         )
 
-        # Build full input with conversation context
+        # Build input with context
         if conversation_context:
-            full_input = f"""CONTESTO CONVERSAZIONE RECENTE:
-{conversation_context}
-
-RICHIESTA ATTUALE DELL'UTENTE:
-{user_input}
-
-IMPORTANTE: Se la richiesta attuale è una risposta/conferma a una domanda precedente (es. "1h", "sì", "ok"),
-usa il contesto della conversazione per capire cosa l'utente vuole fare e completa l'azione."""
+            full_input = f"CONTESTO:\n{conversation_context}\n\nRICHIESTA: {user_input}"
         else:
             full_input = user_input
 
-        # Ask LLM what to do
+        # STEP 1: Ask LLM what to do
+        self.logger.info(f"Calendar agent: analyzing request")
         response = await gemini.generate(
             full_input,
             system_instruction=prompt,
@@ -343,118 +279,117 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             temperature=0.1
         )
 
-        # Parse LLM response
+        # Parse response
         try:
-            clean_response = response.strip()
-            if clean_response.startswith("```"):
-                clean_response = clean_response.split("```")[1]
-                if clean_response.startswith("json"):
-                    clean_response = clean_response[4:]
-                clean_response = clean_response.strip()
-
-            decision = json.loads(clean_response)
-
-            # Handle both single and multiple tool calls
-            if isinstance(decision, list):
-                # Check for search→update/delete pattern (sequential workflow)
-                # Process pairs: (search, action), (search, action), ...
-                results = []
-                i = 0
-                while i < len(decision) - 1:
-                    first_tool = decision[i].get("tool")
-                    second_tool = decision[i + 1].get("tool")
-
-                    # Sequential workflow: search first, then update/delete with found ID
-                    if first_tool in ("search_events", "get_events") and second_tool in ("update_event", "delete_event"):
-                        self.logger.info(f"Calendar agent: sequential workflow {first_tool} → {second_tool}")
-
-                        # Execute search first
-                        search_params = decision[i].get("params", {})
-                        self.logger.info(f"Calendar agent decision: {first_tool} with {search_params}")
-                        search_result = await self._execute_tool(first_tool, search_params)
-
-                        # Get event ID from search results
-                        events = search_result.get("events", [])
-                        if not events:
-                            results.append({
-                                "operation": "search_then_update",
-                                "search_result": search_result,
-                                "error": f"Nessun evento trovato per '{search_params.get('query', '')}'"
-                            })
-                            i += 2
-                            continue
-
-                        # Find matching event - use match_title hint if provided
-                        action_params = decision[i + 1].get("params", {}).copy()
-                        match_title = action_params.pop("match_title", None)  # Remove from params after reading
-
-                        found_event = None
-                        if match_title and len(events) > 1:
-                            # Try to find event by title hint
-                            match_lower = match_title.lower()
-                            for ev in events:
-                                ev_title = (ev.get("title") or "").lower()
-                                # Match if any significant word from match_title is in event title
-                                match_words = [w for w in match_lower.split() if len(w) > 2]
-                                if any(w in ev_title for w in match_words):
-                                    found_event = ev
-                                    break
-
-                        # Fall back to first event
-                        if not found_event:
-                            found_event = events[0]
-
-                        found_event_id = found_event.get("id")
-                        found_event_title = found_event.get("title", "evento")
-
-                        # Replace placeholder in update/delete params
-                        if action_params.get("event_id") == "FOUND_EVENT_ID":
-                            action_params["event_id"] = found_event_id
-
-                        # Execute update/delete
-                        self.logger.info(f"Calendar agent decision: {second_tool} with {action_params}")
-                        action_result = await self._execute_tool(second_tool, action_params)
-
-                        results.append({
-                            "operation": f"search_then_{second_tool}",
-                            "found_event": found_event_title,
-                            "action_result": action_result
-                        })
-                        i += 2  # Move to next pair
-                    else:
-                        # Not a search→action pair, execute single tool
-                        tool_name = decision[i].get("tool")
-                        params = decision[i].get("params", {})
-                        self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
-                        result = await self._execute_tool(tool_name, params)
-                        results.append(result)
-                        i += 1
-
-                # Handle any remaining single tool at the end
-                if i < len(decision):
-                    tool_name = decision[i].get("tool")
-                    params = decision[i].get("params", {})
-                    self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
-                    result = await self._execute_tool(tool_name, params)
-                    results.append(result)
-
-                # Return results
-                if len(results) == 1:
-                    return results[0]
-                return {"multiple_results": results}
-            else:
-                # Single tool call
-                tool_name = decision.get("tool")
-                params = decision.get("params", {})
-                self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
-                return await self._execute_tool(tool_name, params)
-
+            decision = self._parse_json_response(response)
         except Exception as e:
             self.logger.error(f"Failed to parse LLM response: {response[:200]}")
             return {"error": f"Non ho capito la richiesta: {str(e)}"}
 
+        # Handle list of operations (multiple create_event)
+        if isinstance(decision, list):
+            results = []
+            for op in decision:
+                tool_name = op.get("tool")
+                params = op.get("params", {})
+                self.logger.info(f"Calendar agent: {tool_name} with {params}")
+                result = await self._execute_tool(tool_name, params)
+                results.append(result)
+            return {"multiple_results": results} if len(results) > 1 else results[0]
+
+        tool_name = decision.get("tool")
+        params = decision.get("params", {})
+        self.logger.info(f"Calendar agent: {tool_name} with {params}")
+
+        # If tool is none, return message
+        if tool_name == "none":
+            return {"message": decision.get("message", "Nessuna azione necessaria")}
+
+        # STEP 1.5: If it's a search/get that might need follow-up, execute and check
+        if tool_name in ("get_events", "search_events"):
+            search_result = await self._execute_tool(tool_name, params)
+            events = search_result.get("events", [])
+
+            # Check if user just wanted to see events (not modify/delete)
+            request_lower = user_input.lower()
+            is_read_only = any(word in request_lower for word in [
+                "agenda", "programma", "eventi", "appuntamenti", "cosa ho",
+                "che ho", "mostra", "fammi vedere", "quali", "cosa c'è"
+            ])
+            wants_action = any(word in request_lower for word in [
+                "cancella", "elimina", "rimuovi", "sposta", "modifica",
+                "cambia", "aggiorna", "delete", "remove", "update"
+            ])
+
+            if is_read_only and not wants_action:
+                # User just wanted to see events
+                return search_result
+
+            if not events:
+                return search_result  # No events found, return as-is
+
+            # STEP 2: We have events and user wants to do something - ask LLM to pick
+            self.logger.info(f"Calendar agent: step 2 - choosing from {len(events)} events")
+
+            events_formatted = self._format_events_for_llm(events)
+            followup_prompt = FOLLOWUP_PROMPT.format(
+                today=today,
+                weekday=weekday,
+                original_request=user_input,
+                events_list=events_formatted,
+                tools=tools_str
+            )
+
+            followup_response = await gemini.generate(
+                f"Richiesta originale: {user_input}\n\nContesto: {conversation_context}" if conversation_context else user_input,
+                system_instruction=followup_prompt,
+                model="gemini-2.5-flash",
+                temperature=0.1
+            )
+
+            try:
+                followup_decision = self._parse_json_response(followup_response)
+            except Exception as e:
+                self.logger.error(f"Failed to parse followup response: {followup_response[:200]}")
+                return search_result  # Return search results if we can't parse followup
+
+            followup_tool = followup_decision.get("tool")
+            followup_params = followup_decision.get("params", {})
+
+            if followup_tool == "none":
+                return search_result
+
+            # Validate event_id exists
+            if followup_tool in ("update_event", "delete_event"):
+                event_id = followup_params.get("event_id")
+                if not event_id or event_id == "FOUND_EVENT_ID":
+                    self.logger.error(f"LLM returned invalid event_id: {event_id}")
+                    return {"error": "Non sono riuscito a identificare l'evento corretto", "events": events}
+
+                # Verify event_id is in our results
+                valid_ids = [e.get("id") for e in events]
+                if event_id not in valid_ids:
+                    self.logger.warning(f"LLM returned event_id {event_id} not in results {valid_ids}")
+                    # Still try to execute - maybe it's a valid ID from context
+
+            self.logger.info(f"Calendar agent step 2: {followup_tool} with {followup_params}")
+            return await self._execute_tool(followup_tool, followup_params)
+
+        # Direct execution for create_event, etc.
+        return await self._execute_tool(tool_name, params)
+
+    def _parse_json_response(self, response: str) -> dict | list:
+        """Parse JSON from LLM response, handling markdown code blocks."""
+        clean = response.strip()
+        if clean.startswith("```"):
+            clean = clean.split("```")[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+            clean = clean.strip()
+        return json.loads(clean)
+
     async def _execute_tool(self, tool_name: str, params: dict) -> dict:
-        """Execute the selected tool with given parameters."""
+        """Execute the selected tool."""
         user_id = getattr(self, "_current_user_id", None)
 
         if tool_name == "get_events":
@@ -477,21 +412,18 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
         try:
             start_date = params.get("start_date")
             end_date = params.get("end_date")
-            start_time = params.get("start_time", "00:00")
-            end_time = params.get("end_time", "23:59")
 
-            start = datetime.fromisoformat(f"{start_date}T{start_time}")
-            end = datetime.fromisoformat(f"{end_date}T{end_time}")
+            start = datetime.fromisoformat(f"{start_date}T00:00")
+            end = datetime.fromisoformat(f"{end_date}T23:59")
 
             events = calendar_client.get_events(start=start, end=end)
 
-            # Enrich KG with attendees (background task)
             if events and user_id:
                 asyncio.create_task(self._enrich_entities_from_events(user_id, events))
 
             return {
                 "operation": "get_events",
-                "period": f"{start_date} {start_time} - {end_date} {end_time}",
+                "period": f"{start_date} - {end_date}",
                 "events": events,
                 "count": len(events)
             }
@@ -505,17 +437,15 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             query = params.get("query", "").lower()
             now = datetime.now()
 
-            # Default search range: today to +30 days
             start_date = params.get("start_date", now.strftime("%Y-%m-%d"))
             end_date = params.get("end_date", (now + timedelta(days=30)).strftime("%Y-%m-%d"))
 
             start = datetime.fromisoformat(f"{start_date}T00:00")
             end = datetime.fromisoformat(f"{end_date}T23:59")
 
-            # Get all events in range
             all_events = calendar_client.get_events(start=start, end=end, max_results=100)
 
-            # Filter by query (search in title and description)
+            # Filter by query
             matching = []
             for event in all_events:
                 title = (event.get("title") or "").lower()
@@ -523,7 +453,6 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
                 if query in title or query in description:
                     matching.append(event)
 
-            # Enrich KG with attendees from matching events (background task)
             if matching and user_id:
                 asyncio.create_task(self._enrich_entities_from_events(user_id, matching))
 
@@ -532,49 +461,36 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
                 "query": query,
                 "events": matching,
                 "count": len(matching),
-                "message": f"Trovati {len(matching)} eventi con '{query}'" if matching else f"Nessun evento trovato con '{query}'"
+                "message": f"Trovati {len(matching)} eventi" if matching else f"Nessun evento trovato con '{query}'"
             }
         except Exception as e:
             self.logger.error(f"search_events failed: {e}")
-            return {"error": f"Errore nella ricerca eventi: {str(e)}"}
+            return {"error": f"Errore nella ricerca: {str(e)}"}
 
     async def _tool_create_event(self, params: dict) -> dict:
-        """Create a calendar event with optional attendees and Google Meet."""
+        """Create a calendar event."""
         try:
-            # Support both old 'date' param and new 'start_date'/'end_date' for multi-day
             start_date = params.get("start_date") or params.get("date")
-            end_date = params.get("end_date") or start_date  # Default to same day if not specified
+            end_date = params.get("end_date") or start_date
             start_time = params.get("start_time")
             end_time = params.get("end_time")
-            title = params.get("title", "Nuovo evento")
+            title = params.get("title", "Evento")
 
             start = datetime.fromisoformat(f"{start_date}T{start_time}")
             end = datetime.fromisoformat(f"{end_date}T{end_time}")
 
-            # Parse attendees (comma-separated string to list)
             attendees_raw = params.get("attendees", "")
             attendees = None
             if attendees_raw:
                 attendees = [e.strip() for e in attendees_raw.split(",") if e.strip() and "@" in e]
 
-            # Determine if we should add Google Meet
             add_meet_param = params.get("add_meet")
             if isinstance(add_meet_param, str):
                 add_meet = add_meet_param.lower() == "true"
             elif isinstance(add_meet_param, bool):
                 add_meet = add_meet_param
             else:
-                # Default: add meet if there are attendees
                 add_meet = bool(attendees)
-
-            # Check for existing events at the same time to warn about potential conflicts
-            existing_events = calendar_client.get_events(start=start, end=end)
-            conflicts = []
-            for ev in existing_events:
-                # Check if there's an event with similar title at same time (potential duplicate)
-                ev_title = (ev.get("title") or "").lower()
-                if title.lower() in ev_title or ev_title in title.lower():
-                    conflicts.append(ev)
 
             event = calendar_client.create_event(
                 title=title,
@@ -586,39 +502,32 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
                 add_meet=add_meet
             )
 
-            # Build response message
             if start_date == end_date:
                 message = f"Evento '{event['title']}' creato per {start_date} {start_time}-{end_time}"
             else:
-                message = f"Evento '{event['title']}' creato da {start_date} ore {start_time} a {end_date} ore {end_time}"
+                message = f"Evento '{event['title']}' creato da {start_date} {start_time} a {end_date} {end_time}"
+
             if attendees:
                 message += f" con {len(attendees)} partecipanti"
             if event.get("meet_link"):
                 message += f"\n📹 Meet: {event['meet_link']}"
 
-            result = {
+            return {
                 "operation": "create_event",
                 "event": event,
                 "message": message
             }
-
-            if conflicts:
-                self.logger.warning(f"Potential duplicate: {title} conflicts with {[c['title'] for c in conflicts]}")
-                result["warning"] = f"⚠️ Attenzione: esistono già eventi simili in questo orario: {[c['title'] for c in conflicts]}"
-
-            return result
         except Exception as e:
             self.logger.error(f"create_event failed: {e}")
-            return {"error": f"Errore nella creazione evento: {str(e)}"}
+            return {"error": f"Errore nella creazione: {str(e)}"}
 
     async def _tool_update_event(self, params: dict) -> dict:
         """Update an existing calendar event."""
         try:
             event_id = params.get("event_id")
             if not event_id:
-                return {"error": "event_id mancante. Usa search_events per trovare l'ID dell'evento."}
+                return {"error": "event_id mancante"}
 
-            # Build updates dict
             updates = {}
 
             if params.get("title"):
@@ -628,7 +537,6 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             if params.get("location"):
                 updates["location"] = params["location"]
 
-            # Handle date/time updates - support both old 'date' and new 'start_date'/'end_date'
             start_date = params.get("start_date") or params.get("date")
             end_date = params.get("end_date") or start_date
             start_time = params.get("start_time")
@@ -637,13 +545,11 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             if start_date and start_time:
                 updates["start"] = datetime.fromisoformat(f"{start_date}T{start_time}")
             elif start_time:
-                # If only time provided, assume today
                 updates["start"] = datetime.fromisoformat(f"{datetime.now().strftime('%Y-%m-%d')}T{start_time}")
 
             if end_date and end_time:
                 updates["end"] = datetime.fromisoformat(f"{end_date}T{end_time}")
             elif end_time:
-                # Use end_date if available, otherwise start_date, otherwise today
                 use_date = end_date or start_date or datetime.now().strftime('%Y-%m-%d')
                 updates["end"] = datetime.fromisoformat(f"{use_date}T{end_time}")
 
@@ -659,12 +565,15 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             }
         except Exception as e:
             self.logger.error(f"update_event failed: {e}")
-            return {"error": f"Errore nell'aggiornamento evento: {str(e)}"}
+            return {"error": f"Errore nell'aggiornamento: {str(e)}"}
 
     async def _tool_delete_event(self, params: dict) -> dict:
         """Delete a calendar event."""
         try:
             event_id = params.get("event_id")
+            if not event_id:
+                return {"error": "event_id mancante"}
+
             calendar_client.delete_event(event_id)
 
             return {
@@ -674,7 +583,7 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             }
         except Exception as e:
             self.logger.error(f"delete_event failed: {e}")
-            return {"error": f"Errore nell'eliminazione evento: {str(e)}"}
+            return {"error": f"Errore nell'eliminazione: {str(e)}"}
 
     async def _tool_find_free_slots(self, params: dict) -> dict:
         """Find free time slots."""
