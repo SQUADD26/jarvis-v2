@@ -232,7 +232,21 @@ class CalendarAgent(BaseAgent):
         """Execute calendar operations using LLM reasoning."""
         user_input = state["current_input"]
         user_id = state["user_id"]
+        messages = state.get("messages", [])
         self._current_user_id = user_id  # Store for tool methods
+
+        # Build conversation context from recent messages (for follow-up understanding)
+        conversation_context = ""
+        if len(messages) > 1:
+            # Get last 4 messages for context (excluding current)
+            recent = messages[-5:-1] if len(messages) > 5 else messages[:-1]
+            context_parts = []
+            for msg in recent:
+                role = "Utente" if hasattr(msg, 'type') and msg.type == "human" else "Assistente"
+                if hasattr(msg, 'content'):
+                    context_parts.append(f"{role}: {msg.content}")
+            if context_parts:
+                conversation_context = "\n".join(context_parts)
 
         # Get current date info
         now = datetime.now()
@@ -252,9 +266,22 @@ class CalendarAgent(BaseAgent):
             tools=tools_str
         )
 
+        # Build full input with conversation context
+        if conversation_context:
+            full_input = f"""CONTESTO CONVERSAZIONE RECENTE:
+{conversation_context}
+
+RICHIESTA ATTUALE DELL'UTENTE:
+{user_input}
+
+IMPORTANTE: Se la richiesta attuale è una risposta/conferma a una domanda precedente (es. "1h", "sì", "ok"),
+usa il contesto della conversazione per capire cosa l'utente vuole fare e completa l'azione."""
+        else:
+            full_input = user_input
+
         # Ask LLM what to do
         response = await gemini.generate(
-            user_input,
+            full_input,
             system_instruction=prompt,
             model="gemini-2.5-flash",
             temperature=0.1
