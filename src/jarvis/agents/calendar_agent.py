@@ -489,13 +489,26 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             # Get all events in range
             all_events = calendar_client.get_events(start=start, end=end, max_results=100)
 
-            # Filter by query (search in title and description)
+            # Filter by query - fuzzy word matching
+            # Split query into words and match if most words are found
+            query_words = [w for w in query.split() if len(w) > 2]  # Ignore short words
             matching = []
             for event in all_events:
                 title = (event.get("title") or "").lower()
                 description = (event.get("description") or "").lower()
+                combined = f"{title} {description}"
+
+                # Exact substring match (original behavior)
                 if query in title or query in description:
                     matching.append(event)
+                    continue
+
+                # Fuzzy: count how many query words appear in the event
+                if query_words:
+                    matches = sum(1 for w in query_words if w in combined)
+                    # Match if at least 50% of words found (min 1 word)
+                    if matches >= max(1, len(query_words) // 2):
+                        matching.append(event)
 
             # Enrich KG with attendees from matching events (background task)
             if matching and user_id:
