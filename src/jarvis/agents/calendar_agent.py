@@ -38,10 +38,11 @@ CALENDAR_TOOLS = [
     },
     {
         "name": "create_event",
-        "description": "Crea un nuovo evento nel calendario. Può invitare partecipanti e aggiungere Google Meet.",
+        "description": "Crea un nuovo evento nel calendario. Può invitare partecipanti e aggiungere Google Meet. Supporta eventi multi-giorno.",
         "parameters": {
             "title": "Titolo dell'evento (se non specificato, inferisci dal contesto es. 'Meeting con Mario')",
-            "date": "Data in formato YYYY-MM-DD",
+            "start_date": "Data inizio in formato YYYY-MM-DD",
+            "end_date": "Data fine in formato YYYY-MM-DD (opzionale, se diversa da start_date per eventi multi-giorno)",
             "start_time": "Ora inizio in formato HH:MM",
             "end_time": "Ora fine in formato HH:MM (se non specificata, aggiungi 1 ora a start_time)",
             "description": "Descrizione opzionale",
@@ -138,11 +139,13 @@ Rispondi SOLO con JSON valido:
 
 ESEMPI (NOTA: mai chiedere conferme, usa i default):
 - "agenda domani" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
-- "evento alle 12 con test@gmail.com" → {{"tool": "create_event", "params": {{"title": "Meeting con Test", "date": "{today}", "start_time": "12:00", "end_time": "13:00", "attendees": "test@gmail.com", "add_meet": true}}}}
+- "evento alle 12 con test@gmail.com" → {{"tool": "create_event", "params": {{"title": "Meeting con Test", "start_date": "{today}", "start_time": "12:00", "end_time": "13:00", "attendees": "test@gmail.com", "add_meet": true}}}}
   ↑ NOTA: nessuna durata specificata = 1 ora di default (12:00-13:00)
-- "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD", "start_time": "15:00", "end_time": "17:00"}}}}
-- "mettimi un evento alle 10" → {{"tool": "create_event", "params": {{"title": "Evento", "date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}
+- "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "start_date": "YYYY-MM-DD", "start_time": "15:00", "end_time": "17:00"}}}}
+- "mettimi un evento alle 10" → {{"tool": "create_event", "params": {{"title": "Evento", "start_date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}
   ↑ NOTA: nessuna durata = 1 ora, nessun titolo specifico = "Evento"
+- "blocca agenda da mercoledì 14 a sabato 20" → {{"tool": "create_event", "params": {{"title": "Occupato", "start_date": "2025-01-29", "end_date": "2025-02-01", "start_time": "14:00", "end_time": "20:00"}}}}
+  ↑ NOTA: evento multi-giorno usa start_date e end_date DIVERSI
 - "spostalo alle 13" (dopo aver creato "evento di test") → [{{"tool": "search_events", "params": {{"query": "evento di test"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "13:00", "end_time": "14:00"}}}}]
   ↑ NOTA: array con search + update. Il sistema sostituisce FOUND_EVENT_ID con l'ID reale
 - "sposta X alle 14 e Y alle 17:30" → [{{"tool": "search_events", "params": {{"query": "X"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "14:00", "end_time": "15:00"}}}}, {{"tool": "search_events", "params": {{"query": "Y"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "17:30", "end_time": "18:30"}}}}]
@@ -506,13 +509,15 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
     async def _tool_create_event(self, params: dict) -> dict:
         """Create a calendar event with optional attendees and Google Meet."""
         try:
-            date = params.get("date")
+            # Support both old 'date' param and new 'start_date'/'end_date' for multi-day
+            start_date = params.get("start_date") or params.get("date")
+            end_date = params.get("end_date") or start_date  # Default to same day if not specified
             start_time = params.get("start_time")
             end_time = params.get("end_time")
             title = params.get("title", "Nuovo evento")
 
-            start = datetime.fromisoformat(f"{date}T{start_time}")
-            end = datetime.fromisoformat(f"{date}T{end_time}")
+            start = datetime.fromisoformat(f"{start_date}T{start_time}")
+            end = datetime.fromisoformat(f"{end_date}T{end_time}")
 
             # Parse attendees (comma-separated string to list)
             attendees_raw = params.get("attendees", "")
@@ -550,7 +555,10 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             )
 
             # Build response message
-            message = f"Evento '{event['title']}' creato per {date} {start_time}-{end_time}"
+            if start_date == end_date:
+                message = f"Evento '{event['title']}' creato per {start_date} {start_time}-{end_time}"
+            else:
+                message = f"Evento '{event['title']}' creato da {start_date} ore {start_time} a {end_date} ore {end_time}"
             if attendees:
                 message += f" con {len(attendees)} partecipanti"
             if event.get("meet_link"):

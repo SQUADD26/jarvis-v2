@@ -42,10 +42,15 @@ class ApifyGoogleClient:
                         "languageCode": language,
                         "countryCode": country,
                         "mobileResults": False,
-                        "includeUnfilteredResults": False
+                        "includeUnfilteredResults": False,
+                        "saveHtml": False,
+                        "saveHtmlToKeyValueStore": False
                     },
                     timeout=60.0  # Apify can be slow
                 )
+
+                # Debug: log raw response structure for knowledge panel
+                logger.debug(f"Apify raw response: {response.text[:2000]}")
 
                 response.raise_for_status()
                 data = response.json()
@@ -66,12 +71,25 @@ class ApifyGoogleClient:
                     # Knowledge panel (useful for opening hours, info)
                     knowledge = item.get("knowledgePanel", {})
                     if knowledge:
+                        logger.info(f"Knowledge panel keys: {list(knowledge.keys())}")
+                        logger.info(f"Knowledge panel info: {knowledge.get('info', {})}")
+                        # Extract hours from multiple possible locations
+                        hours = (
+                            knowledge.get("openingHours", "") or
+                            knowledge.get("hours", "") or
+                            knowledge.get("info", {}).get("Orari", "") or
+                            knowledge.get("info", {}).get("Hours", "") or
+                            knowledge.get("info", {}).get("Orario", "")
+                        )
                         results.append({
                             "type": "knowledge_panel",
                             "title": knowledge.get("title", ""),
                             "description": knowledge.get("description", ""),
                             "info": knowledge.get("info", {}),
-                            "attributes": knowledge.get("attributes", [])
+                            "attributes": knowledge.get("attributes", []),
+                            "hours": hours,
+                            "phone": knowledge.get("phone", "") or knowledge.get("info", {}).get("Telefono", ""),
+                            "address": knowledge.get("address", "") or knowledge.get("info", {}).get("Indirizzo", "")
                         })
 
                     # Local results (maps, places)
@@ -120,10 +138,19 @@ class ApifyGoogleClient:
         formatted = []
         for r in results:
             if r["type"] == "knowledge_panel":
-                formatted.append(f"📋 {r['title']}: {r['description']}")
+                line = f"📋 {r['title']}"
+                if r.get("description"):
+                    line += f": {r['description']}"
+                if r.get("hours"):
+                    line += f"\n   🕐 {r['hours']}"
+                if r.get("address"):
+                    line += f"\n   📍 {r['address']}"
+                if r.get("phone"):
+                    line += f"\n   📞 {r['phone']}"
                 if r.get("attributes"):
-                    for attr in r["attributes"][:5]:
-                        formatted.append(f"   • {attr}")
+                    for attr in r["attributes"][:3]:
+                        line += f"\n   • {attr}"
+                formatted.append(line)
 
             elif r["type"] == "local":
                 line = f"📍 {r['title']}"
