@@ -145,6 +145,8 @@ ESEMPI (NOTA: mai chiedere conferme, usa i default):
   ↑ NOTA: nessuna durata = 1 ora, nessun titolo specifico = "Evento"
 - "spostalo alle 13" (dopo aver creato "evento di test") → [{{"tool": "search_events", "params": {{"query": "evento di test"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "13:00", "end_time": "14:00"}}}}]
   ↑ NOTA: array con search + update. Il sistema sostituisce FOUND_EVENT_ID con l'ID reale
+- "sposta X alle 14 e Y alle 17:30" → [{{"tool": "search_events", "params": {{"query": "X"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "14:00", "end_time": "15:00"}}}}, {{"tool": "search_events", "params": {{"query": "Y"}}}}, {{"tool": "update_event", "params": {{"event_id": "FOUND_EVENT_ID", "start_time": "17:30", "end_time": "18:30"}}}}]
+  ↑ NOTA: per operazioni MULTIPLE su eventi DIVERSI, metti TUTTE le coppie search+update nell'array
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -338,34 +340,39 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             # Handle both single and multiple tool calls
             if isinstance(decision, list):
                 # Check for search→update/delete pattern (sequential workflow)
-                if len(decision) >= 2:
-                    first_tool = decision[0].get("tool")
-                    second_tool = decision[1].get("tool") if len(decision) > 1 else None
+                # Process pairs: (search, action), (search, action), ...
+                results = []
+                i = 0
+                while i < len(decision) - 1:
+                    first_tool = decision[i].get("tool")
+                    second_tool = decision[i + 1].get("tool")
 
                     # Sequential workflow: search first, then update/delete with found ID
                     if first_tool in ("search_events", "get_events") and second_tool in ("update_event", "delete_event"):
                         self.logger.info(f"Calendar agent: sequential workflow {first_tool} → {second_tool}")
 
                         # Execute search first
-                        search_params = decision[0].get("params", {})
+                        search_params = decision[i].get("params", {})
                         self.logger.info(f"Calendar agent decision: {first_tool} with {search_params}")
                         search_result = await self._execute_tool(first_tool, search_params)
 
                         # Get event ID from search results
                         events = search_result.get("events", [])
                         if not events:
-                            return {
+                            results.append({
                                 "operation": "search_then_update",
                                 "search_result": search_result,
-                                "error": "Nessun evento trovato da modificare"
-                            }
+                                "error": f"Nessun evento trovato per '{search_params.get('query', '')}'"
+                            })
+                            i += 2
+                            continue
 
                         # Use first matching event's ID
                         found_event_id = events[0].get("id")
                         found_event_title = events[0].get("title", "evento")
 
                         # Replace placeholder in update/delete params
-                        action_params = decision[1].get("params", {}).copy()
+                        action_params = decision[i + 1].get("params", {}).copy()
                         if action_params.get("event_id") == "FOUND_EVENT_ID":
                             action_params["event_id"] = found_event_id
 
@@ -373,37 +380,33 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
                         self.logger.info(f"Calendar agent decision: {second_tool} with {action_params}")
                         action_result = await self._execute_tool(second_tool, action_params)
 
-                        return {
+                        results.append({
                             "operation": f"search_then_{second_tool}",
                             "found_event": found_event_title,
                             "action_result": action_result
-                        }
-
-                # Deduplicate and execute remaining calls in parallel
-                seen = set()
-                unique_calls = []
-                for call in decision:
-                    call_key = json.dumps(call, sort_keys=True)
-                    if call_key not in seen:
-                        seen.add(call_key)
-                        unique_calls.append(call)
-
-                self.logger.info(f"Calendar agent: {len(unique_calls)} tool calls to execute in parallel")
-                tasks = []
-                for call in unique_calls:
-                    tool_name = call.get("tool")
-                    params = call.get("params", {})
-                    self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
-                    tasks.append(self._execute_tool(tool_name, params))
-
-                results = await asyncio.gather(*tasks, return_exceptions=True)
-                processed_results = []
-                for r in results:
-                    if isinstance(r, Exception):
-                        processed_results.append({"error": str(r)})
+                        })
+                        i += 2  # Move to next pair
                     else:
-                        processed_results.append(r)
-                return {"multiple_results": processed_results}
+                        # Not a search→action pair, execute single tool
+                        tool_name = decision[i].get("tool")
+                        params = decision[i].get("params", {})
+                        self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
+                        result = await self._execute_tool(tool_name, params)
+                        results.append(result)
+                        i += 1
+
+                # Handle any remaining single tool at the end
+                if i < len(decision):
+                    tool_name = decision[i].get("tool")
+                    params = decision[i].get("params", {})
+                    self.logger.info(f"Calendar agent decision: {tool_name} with {params}")
+                    result = await self._execute_tool(tool_name, params)
+                    results.append(result)
+
+                # Return results
+                if len(results) == 1:
+                    return results[0]
+                return {"multiple_results": results}
             else:
                 # Single tool call
                 tool_name = decision.get("tool")
