@@ -53,11 +53,12 @@ CALENDAR_TOOLS = [
     },
     {
         "name": "update_event",
-        "description": "Modifica un evento esistente. Richiede l'event_id (usa search_events per trovarlo).",
+        "description": "Modifica un evento esistente. Richiede l'event_id (usa search_events per trovarlo). Supporta eventi multi-giorno.",
         "parameters": {
             "event_id": "ID dell'evento da modificare",
             "title": "Nuovo titolo (opzionale)",
-            "date": "Nuova data in formato YYYY-MM-DD (opzionale)",
+            "start_date": "Nuova data inizio in formato YYYY-MM-DD (opzionale)",
+            "end_date": "Nuova data fine in formato YYYY-MM-DD (opzionale, per eventi multi-giorno)",
             "start_time": "Nuova ora inizio in formato HH:MM (opzionale)",
             "end_time": "Nuova ora fine in formato HH:MM (opzionale)",
             "description": "Nuova descrizione (opzionale)",
@@ -119,6 +120,11 @@ PARTECIPANTI:
 - "oggi" = {today}
 - "lunedì prossimo" = calcola la data corretta
 - Se l'utente parla al futuro senza data, usa {tomorrow}
+
+📅 EVENTI MULTI-GIORNO (IMPORTANTE):
+- "da mercoledì a sabato", "da X a Y" → USA start_date E end_date DIVERSI!
+- "blocca da lunedì 14 a giovedì 18" → start_date=lunedì, end_date=giovedì, start_time=14:00, end_time=18:00
+- NON usare mai "date" singolo per eventi che spannano più giorni!
 
 ⚠️ MODIFICHE/ELIMINAZIONI - WORKFLOW OBBLIGATORIO:
 - "spostalo", "cambia orario", "modifica", "elimina" → RESTITUISCI ARRAY con 2 operazioni:
@@ -596,22 +602,24 @@ usa il contesto della conversazione per capire cosa l'utente vuole fare e comple
             if params.get("location"):
                 updates["location"] = params["location"]
 
-            # Handle date/time updates
-            date = params.get("date")
+            # Handle date/time updates - support both old 'date' and new 'start_date'/'end_date'
+            start_date = params.get("start_date") or params.get("date")
+            end_date = params.get("end_date") or start_date
             start_time = params.get("start_time")
             end_time = params.get("end_time")
 
-            if date and start_time:
-                updates["start"] = datetime.fromisoformat(f"{date}T{start_time}")
+            if start_date and start_time:
+                updates["start"] = datetime.fromisoformat(f"{start_date}T{start_time}")
             elif start_time:
-                # If only time provided, we need to get current event date
-                # For now, assume today if date not provided
+                # If only time provided, assume today
                 updates["start"] = datetime.fromisoformat(f"{datetime.now().strftime('%Y-%m-%d')}T{start_time}")
 
-            if date and end_time:
-                updates["end"] = datetime.fromisoformat(f"{date}T{end_time}")
+            if end_date and end_time:
+                updates["end"] = datetime.fromisoformat(f"{end_date}T{end_time}")
             elif end_time:
-                updates["end"] = datetime.fromisoformat(f"{datetime.now().strftime('%Y-%m-%d')}T{end_time}")
+                # Use end_date if available, otherwise start_date, otherwise today
+                use_date = end_date or start_date or datetime.now().strftime('%Y-%m-%d')
+                updates["end"] = datetime.fromisoformat(f"{use_date}T{end_time}")
 
             if not updates:
                 return {"error": "Nessuna modifica specificata"}
