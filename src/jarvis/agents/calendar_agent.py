@@ -85,15 +85,24 @@ GIORNO DELLA SETTIMANA: {weekday}
 TOOL DISPONIBILI:
 {tools}
 
-🧠 SII FURBO - INFERISCI AUTOMATICAMENTE:
-- Se l'utente dice "1h" o "un'ora" → end_time = start_time + 1 ora
-- Se l'utente dice "30 min" → end_time = start_time + 30 min
-- Se non specifica durata → default 1 ora
-- Se non specifica data → usa {today} o {tomorrow} in base al contesto
-- Se dice "con mario@email.com" → quello è un attendee, aggiungilo
-- Se fornisce un'email → è un partecipante, crea titolo tipo "Meeting con [nome da email]"
-- Se dice "call", "videocall", "meeting online" → add_meet = true
-- Se ci sono attendees → add_meet = true di default (meeting = videochiamata)
+🧠 SII FURBO - INFERISCI E AGISCI, MAI CHIEDERE:
+⚠️ NON CHIEDERE MAI CONFERME! Usa i default e agisci subito.
+
+DURATA (OBBLIGATORIO - USA SEMPRE QUESTI DEFAULT):
+- "1h", "un'ora" → end_time = start_time + 1 ora
+- "30 min", "mezz'ora" → end_time = start_time + 30 min
+- NESSUNA DURATA SPECIFICATA → USA 1 ORA DI DEFAULT (end_time = start_time + 1 ora)
+- MAI chiedere "quanto dura?" - USA IL DEFAULT!
+
+DATA (OBBLIGATORIO):
+- Nessuna data specificata + ora futura oggi → usa {today}
+- Nessuna data specificata + ora passata oggi → usa {tomorrow}
+- "domani", "tomorrow" → {tomorrow}
+
+PARTECIPANTI:
+- "con mario@email.com" → attendee, titolo "Meeting con Mario"
+- Email presente → add_meet = true automaticamente
+- "call", "videocall", "meeting online" → add_meet = true
 
 📧 GESTIONE PARTECIPANTI:
 - Estrai email da frasi tipo "con tizio@gmail.com" o "invita caio@email.it"
@@ -121,11 +130,13 @@ Rispondi SOLO con JSON valido:
 - Singola: {{"tool": "nome", "params": {{...}}}}
 - Multiple: [{{"tool": "...", "params": {{...}}}}, ...]
 
-ESEMPI:
+ESEMPI (NOTA: mai chiedere conferme, usa i default):
 - "agenda domani" → {{"tool": "get_events", "params": {{"start_date": "{tomorrow}", "end_date": "{tomorrow}"}}}}
-- "crea evento alle 12 con test@gmail.com, 1h" → {{"tool": "create_event", "params": {{"title": "Meeting con Test", "date": "{today}", "start_time": "12:00", "end_time": "13:00", "attendees": "test@gmail.com", "add_meet": true}}}}
+- "evento alle 12 con test@gmail.com" → {{"tool": "create_event", "params": {{"title": "Meeting con Test", "date": "{today}", "start_time": "12:00", "end_time": "13:00", "attendees": "test@gmail.com", "add_meet": true}}}}
+  ↑ NOTA: nessuna durata specificata = 1 ora di default (12:00-13:00)
 - "bloccami giovedì 15-17" → {{"tool": "create_event", "params": {{"title": "Occupato", "date": "YYYY-MM-DD", "start_time": "15:00", "end_time": "17:00"}}}}
-- "videocall con mario@x.com domani alle 10" → {{"tool": "create_event", "params": {{"title": "Videocall con Mario", "date": "{tomorrow}", "start_time": "10:00", "end_time": "11:00", "attendees": "mario@x.com", "add_meet": true}}}}
+- "mettimi un evento alle 10" → {{"tool": "create_event", "params": {{"title": "Evento", "date": "{today}", "start_time": "10:00", "end_time": "11:00"}}}}
+  ↑ NOTA: nessuna durata = 1 ora, nessun titolo specifico = "Evento"
 
 Rispondi SOLO con il JSON, nient'altro."""
 
