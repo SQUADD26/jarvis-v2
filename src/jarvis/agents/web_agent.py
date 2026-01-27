@@ -6,14 +6,22 @@ import asyncio
 from jarvis.agents.base import BaseAgent
 from jarvis.core.state import JarvisState
 from jarvis.integrations.perplexity import perplexity
+from jarvis.integrations.apify_google import apify_google
 from jarvis.integrations.crawl4ai_client import crawler
 from jarvis.integrations.gemini import gemini
 
 # Tool definitions for the LLM
 WEB_TOOLS = [
     {
+        "name": "google_search",
+        "description": "Cerca su Google. PREFERISCI QUESTO per: orari di apertura, luoghi vicini, attività commerciali, ristoranti, bar, negozi, informazioni locali specifiche.",
+        "parameters": {
+            "query": "La query di ricerca (es. 'bar vicino a Milano centro', 'orari apertura Esselunga Torino')"
+        }
+    },
+    {
         "name": "web_search",
-        "description": "Cerca informazioni sul web usando Perplexity AI. Usa per domande su fatti, notizie, meteo, informazioni generali.",
+        "description": "Cerca informazioni generali usando Perplexity AI. Usa per: notizie, fatti, ricerche approfondite, domande generiche.",
         "parameters": {
             "query": "La query di ricerca in linguaggio naturale"
         }
@@ -32,20 +40,25 @@ AGENT_SYSTEM_PROMPT = """Sei un agente web. Il tuo compito è capire la richiest
 TOOL DISPONIBILI:
 {tools}
 
+🎯 QUANDO USARE QUALE TOOL:
+- google_search → orari apertura, luoghi/attività vicine, bar/ristoranti, negozi, info locali specifiche
+- web_search → notizie, fatti generali, ricerche approfondite, domande generiche
+- scrape_url → quando l'utente fornisce un URL specifico
+
 REGOLE:
 1. Analizza la richiesta e decidi quali tool usare
-2. Per ricerche generali, domande, meteo, notizie → usa web_search
-3. Se l'utente fornisce un URL specifico da leggere → usa scrape_url
-4. Se la richiesta contiene MULTIPLE OPERAZIONI (es: "cerca X e Y", "leggi queste due pagine"), restituisci una LISTA di tool calls
-5. Rispondi SOLO con un JSON valido. Formato:
-   - Singola operazione: {{"tool": "nome_tool", "params": {{...}}}}
-   - Multiple operazioni: [{{"tool": "nome_tool", "params": {{...}}}}, {{"tool": "nome_tool", "params": {{...}}}}]
+2. PREFERISCI google_search per query locali/specifiche (orari, luoghi, attività)
+3. Usa web_search per ricerche generali e notizie
+4. Se la richiesta contiene MULTIPLE OPERAZIONI, restituisci una LISTA di tool calls
+5. Rispondi SOLO con un JSON valido
 
 ESEMPI:
-- "che tempo fa a Milano" → {{"tool": "web_search", "params": {{"query": "meteo Milano oggi"}}}}
+- "a che ora apre il Bar Mario" → {{"tool": "google_search", "params": {{"query": "Bar Mario orari apertura"}}}}
+- "bar buoni vicino a me" → {{"tool": "google_search", "params": {{"query": "bar migliori vicino a me"}}}}
+- "ristoranti Milano centro" → {{"tool": "google_search", "params": {{"query": "ristoranti Milano centro"}}}}
 - "ultime notizie su OpenAI" → {{"tool": "web_search", "params": {{"query": "ultime notizie OpenAI"}}}}
-- "leggi questa pagina https://example.com/article" → {{"tool": "scrape_url", "params": {{"url": "https://example.com/article"}}}}
-- "cerca meteo Milano e meteo Roma" → [{{"tool": "web_search", "params": {{"query": "meteo Milano oggi"}}}}, {{"tool": "web_search", "params": {{"query": "meteo Roma oggi"}}}}]
+- "che tempo fa a Milano" → {{"tool": "google_search", "params": {{"query": "meteo Milano oggi"}}}}
+- "leggi https://example.com" → {{"tool": "scrape_url", "params": {{"url": "https://example.com"}}}}
 
 Rispondi SOLO con il JSON, nient'altro."""
 
@@ -117,12 +130,41 @@ class WebAgent(BaseAgent):
     async def _execute_tool(self, tool_name: str, params: dict) -> dict:
         """Execute the selected tool with given parameters."""
 
-        if tool_name == "web_search":
+        if tool_name == "google_search":
+            return await self._tool_google_search(params)
+        elif tool_name == "web_search":
             return await self._tool_web_search(params)
         elif tool_name == "scrape_url":
             return await self._tool_scrape_url(params)
         else:
             return {"error": f"Tool sconosciuto: {tool_name}"}
+
+    async def _tool_google_search(self, params: dict) -> dict:
+        """Search Google using Apify - better for local/specific queries."""
+        try:
+            query = params.get("query", "")
+
+            result = await apify_google.search(query)
+
+            if "error" in result:
+                # Fallback to Perplexity if Apify fails
+                self.logger.warning(f"Apify failed, falling back to Perplexity: {result['error']}")
+                return await self._tool_web_search(params)
+
+            # Format results for response
+            formatted = apify_google.format_results(result)
+
+            return {
+                "operation": "google_search",
+                "query": query,
+                "results": result.get("results", []),
+                "formatted": formatted,
+                "total": result.get("total_results", 0)
+            }
+        except Exception as e:
+            self.logger.error(f"google_search failed: {e}")
+            # Fallback to Perplexity
+            return await self._tool_web_search(params)
 
     async def _tool_web_search(self, params: dict) -> dict:
         """Search the web using Perplexity."""

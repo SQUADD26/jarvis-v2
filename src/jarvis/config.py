@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     default_model: str = "gemini-2.5-flash"  # Upgraded from 2.0
     powerful_model: str = "gemini-2.5-pro-preview-05-06"
 
+    # Apify (Google Search Scraper)
+    apify_api_key: str = Field(default="", alias="APIFY_API_KEY")
+
     # Jarvis API (for voice client communication)
     jarvis_api_key: str = Field(default="", alias="JARVIS_API_KEY")
     jarvis_api_url: str = Field(default="", alias="JARVIS_API_URL")  # e.g. http://vps:8000
