@@ -6,6 +6,7 @@ import json
 
 from jarvis.agents.base import BaseAgent
 from jarvis.core.state import JarvisState
+from jarvis.config import get_settings
 from jarvis.integrations.notion import notion_client, NotionClient
 from jarvis.integrations.gemini import gemini
 from jarvis.utils.logging import get_logger
@@ -27,6 +28,8 @@ TASK_TOOLS = [
             "due_before": "Scadenza prima di YYYY-MM-DD (opzionale)",
             "due_after": "Scadenza dopo YYYY-MM-DD (opzionale)",
             "text": "Filtra per testo nel titolo (opzionale)",
+            "assignee": "Nome dell'assegnatario per filtrare (opzionale, default: utente corrente)",
+            "all_assignees": "true per vedere task di TUTTI, non solo le proprie (opzionale)",
         },
     },
     {
@@ -72,7 +75,7 @@ TASK_TOOLS = [
     },
 ]
 
-AGENT_SYSTEM_PROMPT = """Sei un agente per la gestione task su Notion. Analizza le richieste e usa i tool appropriati.
+AGENT_SYSTEM_PROMPT = """Sei un agente per la gestione task su Notion. L'utente e {user_name}.
 
 OGGI: {today} ({weekday})
 
@@ -90,6 +93,8 @@ REGOLE:
 5. Per creare task, inferisci il database dal contesto
 6. Usa le proprieta disponibili nel database (status, priority, date, ecc.)
 7. Se una proprieta non esiste nel database, ignorala silenziosamente
+8. "le mie task", "mostra task", senza specificare chi → filtra SOLO le task assegnate a {user_name}
+9. Se l'utente chiede task di qualcun altro o di tutti, NON filtrare per assegnatario
 
 FORMATO OUTPUT: Solo JSON valido
 - Singola operazione: {{"tool": "nome", "params": {{...}}}}
@@ -232,6 +237,9 @@ class TaskAgent(BaseAgent):
         if not databases:
             return {"error": "Nessun database Notion trovato. Verifica la configurazione dell'integrazione."}
 
+        settings = get_settings()
+        user_name = settings.notion_user_name or "utente"
+
         tools_str = json.dumps(TASK_TOOLS, indent=2, ensure_ascii=False)
 
         prompt = AGENT_SYSTEM_PROMPT.format(
@@ -240,6 +248,7 @@ class TaskAgent(BaseAgent):
             databases_info=databases_info,
             tools=tools_str,
             in_7_days=in_7_days,
+            user_name=user_name,
         )
 
         # Set user context for LLM logging
@@ -398,7 +407,6 @@ class TaskAgent(BaseAgent):
             # Client-side text filter if needed
             text_filter = params.get("text", "").lower()
             if text_filter:
-                # Find the title property
                 title_prop = self._find_property_by_role(schema, "title")
                 if title_prop:
                     title_name = title_prop[0]
@@ -406,6 +414,36 @@ class TaskAgent(BaseAgent):
                         t for t in tasks
                         if text_filter in str(t.get(title_name, "")).lower()
                     ]
+
+            # Client-side assignee filter
+            all_assignees = params.get("all_assignees")
+            if isinstance(all_assignees, str):
+                all_assignees = all_assignees.lower() == "true"
+
+            if not all_assignees:
+                assignee_filter = params.get("assignee", "").strip()
+                if not assignee_filter:
+                    settings = get_settings()
+                    assignee_filter = settings.notion_user_name
+
+                if assignee_filter:
+                    assignee_lower = assignee_filter.lower()
+                    # Find people property in schema
+                    people_prop_name = None
+                    props = schema.get("properties", {})
+                    for name, info in props.items():
+                        if info["type"] == "people":
+                            people_prop_name = name
+                            break
+
+                    if people_prop_name:
+                        tasks = [
+                            t for t in tasks
+                            if any(
+                                assignee_lower in str(p).lower()
+                                for p in (t.get(people_prop_name) or [])
+                            )
+                        ]
 
             summaries = self._summarize_tasks(tasks, schema)
             return {

@@ -49,6 +49,7 @@ class Settings(BaseSettings):
 
     # Notion
     notion_api_key: str = Field(default="", alias="NOTION_API_KEY")
+    notion_user_name: str = Field(default="", alias="NOTION_USER_NAME")
 
     # Apify (Google Search Scraper)
     apify_api_key: str = Field(default="", alias="APIFY_API_KEY")

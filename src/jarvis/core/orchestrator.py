@@ -36,7 +36,8 @@ QUERY ATTUALE: {query}
 QUERY RISCRITTA:"""
 
 # System prompt for Jarvis
-JARVIS_SYSTEM_PROMPT = """Sei JARVIS, l'assistente personale AI.
+JARVIS_SYSTEM_PROMPT = """Sei JARVIS, l'assistente personale AI di Roberto Bondici, CTO di Squadd.
+Roberto si occupa di automazioni, API, integrazioni, ma anche management con team e clienti.
 
 DATA DI OGGI: {today}
 
