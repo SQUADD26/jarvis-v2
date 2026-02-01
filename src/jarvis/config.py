@@ -50,6 +50,13 @@ class Settings(BaseSettings):
     # Notion
     notion_api_key: str = Field(default="", alias="NOTION_API_KEY")
     notion_user_name: str = Field(default="", alias="NOTION_USER_NAME")
+    notion_task_databases: str = Field(default="", alias="NOTION_TASK_DATABASES")  # comma-separated DB IDs
+
+    @property
+    def notion_task_database_ids(self) -> list[str]:
+        if self.notion_task_databases:
+            return [x.strip() for x in self.notion_task_databases.split(",") if x.strip()]
+        return []
 
     # Apify (Google Search Scraper)
     apify_api_key: str = Field(default="", alias="APIFY_API_KEY")

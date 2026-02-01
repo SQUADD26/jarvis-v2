@@ -116,9 +116,20 @@ class TaskAgent(BaseAgent):
 
     async def _get_databases_info(self) -> tuple[list[dict], str]:
         """Load databases with schemas and build info string for LLM."""
-        databases = await notion_client.discover_databases()
-        if not databases:
+        all_databases = await notion_client.discover_databases()
+        if not all_databases:
             return [], "Nessun database trovato."
+
+        # Filter to configured task databases only
+        settings = get_settings()
+        allowed_ids = settings.notion_task_database_ids
+        if allowed_ids:
+            databases = [db for db in all_databases if db["id"] in allowed_ids]
+        else:
+            databases = all_databases
+
+        if not databases:
+            return [], "Nessun database task configurato."
 
         info_parts = []
         for db in databases:
