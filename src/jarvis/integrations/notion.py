@@ -132,17 +132,30 @@ class NotionClient:
         db_id: str,
         filter_obj: dict = None,
         sorts: list = None,
-        page_size: int = 50,
+        page_size: int = 100,
+        max_pages: int = 5,
     ) -> list[dict]:
-        """Query a database with optional filters and sorts."""
-        body: dict[str, Any] = {"page_size": min(page_size, 100)}
-        if filter_obj:
-            body["filter"] = filter_obj
-        if sorts:
-            body["sorts"] = sorts
+        """Query a database with pagination (up to max_pages * 100 results)."""
+        results = []
+        start_cursor = None
 
-        data = await self._request("POST", f"/databases/{db_id}/query", body)
-        return [self.format_page_properties(p) for p in data.get("results", [])]
+        for _ in range(max_pages):
+            body: dict[str, Any] = {"page_size": min(page_size, 100)}
+            if filter_obj:
+                body["filter"] = filter_obj
+            if sorts:
+                body["sorts"] = sorts
+            if start_cursor:
+                body["start_cursor"] = start_cursor
+
+            data = await self._request("POST", f"/databases/{db_id}/query", body)
+            results.extend(self.format_page_properties(p) for p in data.get("results", []))
+
+            if not data.get("has_more"):
+                break
+            start_cursor = data.get("next_cursor")
+
+        return results
 
     async def search_pages(self, query: str) -> list[dict]:
         """Full-text search across all pages."""

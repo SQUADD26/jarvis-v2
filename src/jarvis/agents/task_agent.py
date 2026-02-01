@@ -439,9 +439,10 @@ class TaskAgent(BaseAgent):
                     if people_prop_name:
                         tasks = [
                             t for t in tasks
-                            if any(
+                            if not t.get(people_prop_name)  # unassigned → include
+                            or any(
                                 assignee_lower in str(p).lower()
-                                for p in (t.get(people_prop_name) or [])
+                                for p in t.get(people_prop_name, [])
                             )
                         ]
 
