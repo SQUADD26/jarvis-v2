@@ -449,11 +449,20 @@ class TaskAgent(BaseAgent):
         except (ValueError, IndexError):
             return iso_date
 
+    # Statuses that are the obvious default — no need to show them
+    _DEFAULT_STATUSES = {
+        "da fare", "da iniziare", "to do", "not started", "senza stato",
+    }
+
     def _format_task_line(self, t: dict) -> str:
-        """Format a single task as a dash-prefixed line."""
+        """Format a single task as a dash-prefixed line.
+
+        Omits status when it's the obvious default (Da Fare, Da iniziare).
+        """
         parts = [t.get("title", "?")]
-        if t.get("status"):
-            parts.append(t["status"])
+        status = t.get("status", "")
+        if status and status.lower() not in self._DEFAULT_STATUSES:
+            parts.append(status)
         if t.get("due"):
             parts.append(self._format_date_it(t["due"]))
         if t.get("priority"):
