@@ -21,7 +21,7 @@ TASK_TOOLS = [
     },
     {
         "name": "query_tasks",
-        "description": "Cerca task in un database con filtri opzionali.",
+        "description": "Cerca task in un database con filtri opzionali. Per default esclude le task completate/done.",
         "parameters": {
             "database_id": "ID del database Notion",
             "status": "Filtra per stato (opzionale)",
@@ -30,6 +30,7 @@ TASK_TOOLS = [
             "text": "Filtra per testo nel titolo (opzionale)",
             "assignee": "Nome dell'assegnatario per filtrare (opzionale, default: utente corrente)",
             "all_assignees": "true per vedere task di TUTTI, non solo le proprie (opzionale)",
+            "include_done": "true per includere anche task completate (opzionale, default: false)",
         },
     },
     {
@@ -124,9 +125,16 @@ class TaskAgent(BaseAgent):
         settings = get_settings()
         allowed_ids = settings.notion_task_database_ids
         if allowed_ids:
-            databases = [db for db in all_databases if db["id"] in allowed_ids]
+            # Normalize IDs (Notion sometimes uses/omits dashes)
+            allowed_normalized = {aid.replace("-", "") for aid in allowed_ids}
+            databases = [
+                db for db in all_databases
+                if db["id"] in allowed_ids or db["id"].replace("-", "") in allowed_normalized
+            ]
+            logger.info(f"Task DB filter: {len(all_databases)} total → {len(databases)} allowed (config: {len(allowed_ids)} IDs)")
         else:
             databases = all_databases
+            logger.warning("No NOTION_TASK_DATABASES configured, using ALL databases")
 
         if not databases:
             return [], "Nessun database task configurato."
@@ -415,6 +423,18 @@ class TaskAgent(BaseAgent):
 
             tasks = await notion_client.query_database(db_id, filter_obj, sorts)
 
+            # Exclude completed/done/archived tasks by default
+            exclude_done = params.get("include_done") is None
+            if exclude_done:
+                status_prop = self._find_property_by_role(schema, "status")
+                if status_prop:
+                    done_keywords = {"done", "completato", "completata", "fatto", "fatta", "completed", "chiuso", "chiusa", "archiviato"}
+                    sname = status_prop[0]
+                    tasks = [
+                        t for t in tasks
+                        if str(t.get(sname, "")).lower() not in done_keywords
+                    ]
+
             # Client-side text filter if needed
             text_filter = params.get("text", "").lower()
             if text_filter:
@@ -457,12 +477,23 @@ class TaskAgent(BaseAgent):
                             )
                         ]
 
+            total_count = len(tasks)
+            # Hard cap: return max 25 tasks to keep LLM context manageable
+            MAX_RESULTS = 25
+            truncated = total_count > MAX_RESULTS
+            if truncated:
+                tasks = tasks[:MAX_RESULTS]
+
             summaries = self._summarize_tasks(tasks, schema)
-            return {
+            result = {
                 "operation": "query_tasks",
                 "tasks": summaries,
                 "count": len(summaries),
+                "total": total_count,
             }
+            if truncated:
+                result["note"] = f"Mostrate {MAX_RESULTS} di {total_count} task. Usa filtri per restringere."
+            return result
         except Exception as e:
             self.logger.error(f"query_tasks failed: {e}")
             return {"error": f"Errore nella query: {e}"}

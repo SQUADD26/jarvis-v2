@@ -694,6 +694,14 @@ async def run_bot():
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
 
+    # Flush stale Notion caches on startup
+    try:
+        flushed = await redis_client.flush_pattern("jarvis:notion:*")
+        if flushed:
+            logger.info(f"Flushed {flushed} stale Notion cache keys")
+    except Exception as e:
+        logger.warning(f"Failed to flush Notion cache: {e}")
+
     # Schedule proactive checks
     await _schedule_notion_proactive_checks()
 
