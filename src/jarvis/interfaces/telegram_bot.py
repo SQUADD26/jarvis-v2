@@ -435,12 +435,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        try:
-            formatted = format_for_telegram(response)
-            await update.message.reply_text(formatted, parse_mode="HTML")
-        except Exception:
-            logger.warning("HTML formatting failed for voice response, sending as plain text")
-            await update.message.reply_text(response)
+        await _send_split_response(update, response)
 
     except Exception as e:
         logger.error(f"Error processing voice message: {e}", exc_info=True)
@@ -579,6 +574,53 @@ async def extract_pdf_text(pdf_bytes: bytes) -> str:
         raise ValueError(f"Impossibile leggere il PDF: {e}")
 
 
+def _split_long_message(text: str, max_len: int = 4000) -> list[str]:
+    """Split a message that exceeds max_len on line boundaries."""
+    if len(text) <= max_len:
+        return [text]
+
+    parts = []
+    while text:
+        if len(text) <= max_len:
+            parts.append(text)
+            break
+        # Find last newline before the limit
+        cut = text.rfind("\n", 0, max_len)
+        if cut <= 0:
+            cut = max_len
+        parts.append(text[:cut])
+        text = text[cut:].lstrip("\n")
+    return parts
+
+
+async def _send_split_response(update: Update, response: str):
+    """Send a response, splitting on '---' separators and respecting Telegram's 4096 char limit."""
+    SPLIT_MARKER = "\n\n---\n\n"
+
+    if SPLIT_MARKER in response:
+        segments = response.split(SPLIT_MARKER)
+    else:
+        segments = [response]
+
+    # Further split any segment that exceeds Telegram's limit
+    all_parts = []
+    for seg in segments:
+        seg = seg.strip()
+        if not seg:
+            continue
+        all_parts.extend(_split_long_message(seg))
+
+    for i, part in enumerate(all_parts):
+        try:
+            formatted = format_for_telegram(part)
+            await update.message.reply_text(formatted, parse_mode="HTML")
+        except Exception:
+            logger.warning("HTML formatting failed, sending as plain text")
+            await update.message.reply_text(part)
+        if i < len(all_parts) - 1:
+            await asyncio.sleep(0.3)
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming text messages."""
     user_id = update.effective_user.id
@@ -616,12 +658,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass  # Ignore if we can't delete (e.g., message too old)
 
         # Send response with HTML parsing (with plain text fallback)
-        try:
-            formatted = format_for_telegram(response)
-            await update.message.reply_text(formatted, parse_mode="HTML")
-        except Exception:
-            logger.warning("HTML formatting failed, sending as plain text")
-            await update.message.reply_text(response)
+        await _send_split_response(update, response)
 
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)

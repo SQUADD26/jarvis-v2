@@ -322,9 +322,17 @@ class TaskAgent(BaseAgent):
         self.logger.info(f"Task agent: {tool_name} with {params}")
 
         if tool_name == "none":
-            return {"message": decision.get("message", "Nessuna azione necessaria")}
+            return decision.get("message", "Nessuna azione necessaria")
 
-        return await self._execute_tool(tool_name, params)
+        result = await self._execute_tool(tool_name, params)
+
+        # For query operations, return the digest string directly so the LLM
+        # receives clean text instead of str(dict)
+        if isinstance(result, str):
+            return result
+        if isinstance(result, dict) and "digest" in result:
+            return result["digest"]
+        return result
 
     def _parse_json_response(self, response: str) -> dict:
         """Parse JSON from LLM response, handling markdown code blocks."""
@@ -378,7 +386,7 @@ class TaskAgent(BaseAgent):
                 if isinstance(rel_ids, list):
                     all_relation_ids.update(rel_ids)
 
-        # Resolve relation titles in batch
+        # Resolve relation titles in batch (now returns {id: {title, url}})
         relation_titles = {}
         if all_relation_ids:
             try:
@@ -402,13 +410,24 @@ class TaskAgent(BaseAgent):
             if priority_prop:
                 summary["priority"] = t.get(priority_prop[0])
 
-            # Resolve project/relation name
+            # Resolve project/relation name and URL
             if relation_prop:
                 rel_ids = t.get(relation_prop, [])
                 if isinstance(rel_ids, list) and rel_ids:
-                    project_names = [relation_titles.get(rid, "") for rid in rel_ids if relation_titles.get(rid)]
-                    if project_names:
-                        summary["project"] = ", ".join(project_names)
+                    project_parts = []
+                    project_urls = []
+                    for rid in rel_ids:
+                        info = relation_titles.get(rid, {})
+                        title = info.get("title", "") if isinstance(info, dict) else str(info)
+                        url = info.get("url", "") if isinstance(info, dict) else ""
+                        if title:
+                            project_parts.append(title)
+                            if url:
+                                project_urls.append(url)
+                    if project_parts:
+                        summary["project"] = ", ".join(project_parts)
+                        if project_urls:
+                            summary["project_url"] = project_urls[0]
 
             # Include assignee if present (people property)
             for name, info in props.items():
@@ -422,55 +441,45 @@ class TaskAgent(BaseAgent):
     def _build_text_digest(self, summaries: list[dict], db_title: str = "") -> str:
         """Build a pre-formatted text digest of tasks for the LLM.
 
-        Groups tasks by project (if available), then by status.
+        Groups tasks by project (with URLs), natural format without
+        technical headers like "Database:" or "Per stato:".
         """
         if not summaries:
             return "Nessuna task trovata."
 
         total = len(summaries)
 
-        # Count by status
+        # Status counts as compact string: "12 da fare, 3 in corso, 2 in attesa"
         by_status: dict[str, int] = {}
         for s in summaries:
             status = s.get("status") or "Senza stato"
             by_status[status] = by_status.get(status, 0) + 1
-
-        # Count by priority
-        by_priority: dict[str, int] = {}
-        for s in summaries:
-            prio = s.get("priority") or "Senza priorita"
-            by_priority[prio] = by_priority.get(prio, 0) + 1
+        status_parts = [f"{count} {status}" for status, count in by_status.items()]
 
         lines = []
-        if db_title:
-            lines.append(f"Database: {db_title}")
-        lines.append(f"Totale: {total} task attive")
-        lines.append("")
-
-        # Status breakdown
-        lines.append("Per stato:")
-        for status, count in by_status.items():
-            lines.append(f"  - {status}: {count}")
-
-        # Priority breakdown if available
-        if any(s.get("priority") for s in summaries):
-            lines.append("")
-            lines.append("Per priorita:")
-            for prio, count in sorted(by_priority.items()):
-                lines.append(f"  - {prio}: {count}")
+        lines.append(f"{total} task attive ({', '.join(status_parts)})")
 
         # Group tasks by project, then list
         has_projects = any(s.get("project") for s in summaries)
 
         if has_projects:
             by_project: dict[str, list[dict]] = {}
+            project_urls: dict[str, str] = {}
             for s in summaries:
                 proj = s.get("project") or "Senza progetto"
                 by_project.setdefault(proj, []).append(s)
+                if s.get("project_url") and proj not in project_urls:
+                    project_urls[proj] = s["project_url"]
 
-            lines.append("")
+            # Projects with tasks
             for project, tasks in sorted(by_project.items()):
-                lines.append(f"\n[{project}] ({len(tasks)} task)")
+                if project == "Senza progetto":
+                    continue
+                url = project_urls.get(project, "")
+                if url:
+                    lines.append(f"\n{project} ({url})")
+                else:
+                    lines.append(f"\n{project}")
                 for t in tasks:
                     parts = [t.get("title", "?")]
                     if t.get("status"):
@@ -478,25 +487,38 @@ class TaskAgent(BaseAgent):
                     if t.get("due"):
                         parts.append(f"scad: {t['due']}")
                     if t.get("priority"):
-                        parts.append(f"[{t['priority']}]")
-                    lines.append(f"  - {' | '.join(parts)}")
+                        parts.append(t["priority"])
+                    lines.append(f"- {' | '.join(parts)}")
+
+            # Tasks without project at the end
+            no_project = by_project.get("Senza progetto", [])
+            if no_project:
+                lines.append("\nSenza progetto:")
+                for t in no_project:
+                    parts = [t.get("title", "?")]
+                    if t.get("status"):
+                        parts.append(t["status"])
+                    if t.get("due"):
+                        parts.append(f"scad: {t['due']}")
+                    if t.get("priority"):
+                        parts.append(t["priority"])
+                    lines.append(f"- {' | '.join(parts)}")
         else:
-            # No projects - group by status
+            # No projects - flat list grouped by status
             by_status_tasks: dict[str, list[dict]] = {}
             for s in summaries:
                 status = s.get("status") or "Senza stato"
                 by_status_tasks.setdefault(status, []).append(s)
 
-            lines.append("")
             for status, tasks in by_status_tasks.items():
-                lines.append(f"\n--- {status} ({len(tasks)}) ---")
+                lines.append(f"\n{status}:")
                 for t in tasks:
                     parts = [t.get("title", "?")]
                     if t.get("due"):
                         parts.append(f"scad: {t['due']}")
                     if t.get("priority"):
-                        parts.append(f"[{t['priority']}]")
-                    lines.append(f"  - {' | '.join(parts)}")
+                        parts.append(t["priority"])
+                    lines.append(f"- {' | '.join(parts)}")
 
         return "\n".join(lines)
 
@@ -513,12 +535,21 @@ class TaskAgent(BaseAgent):
             self.logger.error(f"list_databases failed: {e}")
             return {"error": f"Errore nel recupero database: {e}"}
 
-    async def _tool_query_all_tasks(self, params: dict) -> dict:
-        """Query tasks across ALL configured databases in parallel."""
+    async def _tool_query_all_tasks(self, params: dict) -> str:
+        """Query tasks across ALL configured databases in parallel.
+
+        Returns a pre-formatted string with [TASK_LAVORO] and [TASK_PERSONALI] sections.
+        """
         try:
             databases, _ = await self._get_databases_info()
             if not databases:
-                return {"error": "Nessun database configurato"}
+                return "Nessun database configurato."
+
+            # Classify databases as personal or work
+            personal_keywords = {"personale", "personali", "personal", "privat"}
+
+            def is_personal(db_title: str) -> bool:
+                return any(kw in db_title.lower() for kw in personal_keywords)
 
             # Query all databases in parallel
             async def query_db(db):
@@ -527,8 +558,10 @@ class TaskAgent(BaseAgent):
 
             results = await asyncio.gather(*(query_db(db) for db in databases), return_exceptions=True)
 
-            all_digests = []
-            total_count = 0
+            work_digests = []
+            personal_digests = []
+            work_count = 0
+            personal_count = 0
 
             for item in results:
                 if isinstance(item, Exception):
@@ -536,25 +569,32 @@ class TaskAgent(BaseAgent):
                     continue
                 db, result = item
                 if result.get("error"):
-                    all_digests.append(f"Database: {db['title']}\nErrore: {result['error']}")
                     continue
                 count = result.get("count", 0)
-                total_count += count
-                if count > 0:
-                    all_digests.append(result.get("digest", f"{db['title']}: {count} task"))
+                if count == 0:
+                    continue
 
-            if not all_digests:
-                return {"operation": "query_all_tasks", "digest": "Nessuna task trovata.", "count": 0}
+                digest = result.get("digest", "")
+                if is_personal(db.get("title", "")):
+                    personal_count += count
+                    personal_digests.append(digest)
+                else:
+                    work_count += count
+                    work_digests.append(digest)
 
-            full_digest = f"RIEPILOGO TOTALE: {total_count} task attive\n\n" + "\n\n---\n\n".join(all_digests)
-            return {
-                "operation": "query_all_tasks",
-                "digest": full_digest,
-                "count": total_count,
-            }
+            parts = []
+            if work_digests:
+                parts.append(f"[TASK_LAVORO]\nHai {work_count} task attive per i clienti.\n\n" + "\n\n".join(work_digests))
+            if personal_digests:
+                parts.append(f"[TASK_PERSONALI]\nHai {personal_count} task personali.\n\n" + "\n\n".join(personal_digests))
+
+            if not parts:
+                return "Nessuna task trovata."
+
+            return "\n\n".join(parts)
         except Exception as e:
             self.logger.error(f"query_all_tasks failed: {e}")
-            return {"error": f"Errore nella query: {e}"}
+            return f"Errore nel recupero task: {e}"
 
     async def _tool_query_tasks(self, params: dict) -> dict:
         """Query tasks with filters."""

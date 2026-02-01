@@ -167,22 +167,32 @@ class NotionClient:
                 results.append(self.format_page_properties(item))
         return results
 
-    async def get_page_title(self, page_id: str) -> str:
-        """Get just the title of a page by ID."""
+    async def get_page_title(self, page_id: str) -> dict:
+        """Get title and URL of a page by ID."""
         data = await self._request("GET", f"/pages/{page_id}")
+        url = data.get("url", "")
         for prop in data.get("properties", {}).values():
             if prop.get("type") == "title":
-                return "".join(t.get("plain_text", "") for t in prop.get("title", []))
-        return ""
+                title = "".join(t.get("plain_text", "") for t in prop.get("title", []))
+                return {"title": title, "url": url}
+        return {"title": "", "url": url}
 
-    async def resolve_relation_titles(self, page_ids: list[str]) -> dict[str, str]:
-        """Resolve a batch of page IDs to their titles. Returns {id: title}."""
+    async def resolve_relation_titles(self, page_ids: list[str]) -> dict[str, dict]:
+        """Resolve a batch of page IDs to their titles and URLs.
+
+        Returns {id: {"title": str, "url": str}}.
+        """
         if not page_ids:
             return {}
 
         # Check Redis cache first
         cache_key = "jarvis:notion:page_titles"
         cached = await redis_client.get(cache_key) or {}
+
+        # Migrate old cache format (str values → dict values)
+        for k, v in cached.items():
+            if isinstance(v, str):
+                cached[k] = {"title": v, "url": ""}
 
         missing = [pid for pid in page_ids if pid not in cached]
         if missing:
@@ -192,19 +202,19 @@ class NotionClient:
             async def fetch(pid):
                 async with sem:
                     try:
-                        title = await self.get_page_title(pid)
-                        return pid, title
+                        info = await self.get_page_title(pid)
+                        return pid, info
                     except Exception:
-                        return pid, ""
+                        return pid, {"title": "", "url": ""}
 
             results = await asyncio.gather(*(fetch(pid) for pid in set(missing)))
-            for pid, title in results:
-                cached[pid] = title
+            for pid, info in results:
+                cached[pid] = info
 
             # Cache for 1 hour
             await redis_client.set(cache_key, cached, 3600)
 
-        return {pid: cached.get(pid, "") for pid in page_ids}
+        return {pid: cached.get(pid, {"title": "", "url": ""}) for pid in page_ids}
 
     # ── Create / Update / Archive ───────────────────────────────────
 

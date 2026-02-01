@@ -85,11 +85,13 @@ REGOLE FONDAMENTALI:
    - NON inventare dettagli non presenti nelle entità
 
 8. QUANDO MOSTRI TASK/ATTIVITÀ:
-   - Raggruppa per database/progetto se ci sono più database
-   - Mostra SOLO: titolo, stato, scadenza (se presente), titolare (se presente)
-   - Se sono tante (>10), mostra un RIEPILOGO CONTEGGIO per stato (es. "15 Da Fare, 3 In Corso, 2 Completate")
-   - Poi elenca SOLO le task urgenti/in scadenza, o le prime 5-8 più rilevanti
-   - MAI elencare 20+ task una per una - è illeggibile
+   - I dati dell'agente sono GIA formattati. Usali come base per la risposta.
+   - Se ci sono task di lavoro [TASK_LAVORO] E personali [TASK_PERSONALI], separa con "---" su riga vuota tra i due blocchi
+   - Nomi progetto seguiti da (url) → trasformali in <a href="url">Nome Progetto</a>
+   - NON aggiungere spiegazioni tipo "ecco le tue task organizzate per..."
+   - NON ripetere conteggi se gia presenti nei dati agente
+   - Tono naturale: "Hai 34 task attive per i clienti:" non "Attualmente hai un totale di..."
+   - Se sono tante (>15 per sezione), mostra le prime 8-10 più rilevanti e riassumi il resto
    - MAI chiedere "ti sembra adeguata?" o simili domande di cortesia
 
 FORMATTAZIONE (OBBLIGATORIA - USA SOLO QUESTI TAG HTML):
