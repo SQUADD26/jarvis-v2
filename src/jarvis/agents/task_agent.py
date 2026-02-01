@@ -171,6 +171,13 @@ class TaskAgent(BaseAgent):
                     return (name, "title")
 
         elif role == "status":
+            # Prefer status-type fields named "status"/"stato" over others
+            for name, info in props.items():
+                if info["type"] == "status" and any(
+                    kw in name.lower() for kw in ["stato", "status", "state"]
+                ):
+                    return (name, "status")
+            # Fallback: any status-type field
             for name, info in props.items():
                 if info["type"] == "status":
                     return (name, "status")
@@ -181,20 +188,27 @@ class TaskAgent(BaseAgent):
                     return (name, "select")
 
         elif role == "date":
+            # Prefer "scadenza"/"due"/"deadline" over generic date fields
             for name, info in props.items():
                 if info["type"] == "date" and any(
                     kw in name.lower()
-                    for kw in ["scadenza", "due", "data", "deadline", "date"]
+                    for kw in ["scadenza", "due", "deadline"]
                 ):
                     return (name, "date")
-            # Fallback: first date property
+            # Fallback: any date field with date-like name
+            for name, info in props.items():
+                if info["type"] == "date" and any(
+                    kw in name.lower() for kw in ["data", "date"]
+                ):
+                    return (name, "date")
+            # Last resort: first date property
             for name, info in props.items():
                 if info["type"] == "date":
                     return (name, "date")
 
         elif role == "priority":
             for name, info in props.items():
-                if info["type"] in ("select", "multi_select") and any(
+                if info["type"] in ("select", "multi_select", "status") and any(
                     kw in name.lower() for kw in ["priorit", "priority"]
                 ):
                     return (name, info["type"])
@@ -486,6 +500,7 @@ class TaskAgent(BaseAgent):
             # Exclude completed/done/archived tasks by default
             exclude_done = params.get("include_done") is None
             if exclude_done:
+                before = len(tasks)
                 status_prop = self._find_property_by_role(schema, "status")
                 if status_prop:
                     done_keywords = {"done", "completato", "completata", "fatto", "fatta", "completed", "chiuso", "chiusa", "archiviato"}
@@ -494,6 +509,15 @@ class TaskAgent(BaseAgent):
                         t for t in tasks
                         if str(t.get(sname, "")).lower() not in done_keywords
                     ]
+                # Also filter by checkbox "Fatto?" if present
+                props = schema.get("properties", {})
+                for pname, pinfo in props.items():
+                    if pinfo["type"] == "checkbox" and any(
+                        kw in pname.lower() for kw in ["fatto", "done", "complet"]
+                    ):
+                        tasks = [t for t in tasks if not t.get(pname, False)]
+                        break
+                logger.info(f"Done filter: {before} → {len(tasks)} tasks")
 
             # Client-side text filter if needed
             text_filter = params.get("text", "").lower()
