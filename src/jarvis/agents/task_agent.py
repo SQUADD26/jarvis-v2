@@ -438,18 +438,39 @@ class TaskAgent(BaseAgent):
             summaries.append(summary)
         return summaries
 
+    @staticmethod
+    def _format_date_it(iso_date: str) -> str:
+        """Convert ISO date (YYYY-MM-DD) to Italian readable format (6 feb)."""
+        mesi = ["gen", "feb", "mar", "apr", "mag", "giu",
+                "lug", "ago", "set", "ott", "nov", "dic"]
+        try:
+            dt = datetime.strptime(iso_date[:10], "%Y-%m-%d")
+            return f"{dt.day} {mesi[dt.month - 1]}"
+        except (ValueError, IndexError):
+            return iso_date
+
+    def _format_task_line(self, t: dict) -> str:
+        """Format a single task as a dash-prefixed line."""
+        parts = [t.get("title", "?")]
+        if t.get("status"):
+            parts.append(t["status"])
+        if t.get("due"):
+            parts.append(self._format_date_it(t["due"]))
+        if t.get("priority"):
+            parts.append(t["priority"])
+        return f"- {' | '.join(parts)}"
+
     def _build_text_digest(self, summaries: list[dict], db_title: str = "") -> str:
         """Build a pre-formatted text digest of tasks for the LLM.
 
-        Groups tasks by project (with URLs), natural format without
-        technical headers like "Database:" or "Per stato:".
+        Groups tasks by project (with HTML links), Italian dates.
         """
         if not summaries:
             return "Nessuna task trovata."
 
         total = len(summaries)
 
-        # Status counts as compact string: "12 da fare, 3 in corso, 2 in attesa"
+        # Status counts as compact string: "12 Da Fare, 3 In Corso"
         by_status: dict[str, int] = {}
         for s in summaries:
             status = s.get("status") or "Senza stato"
@@ -481,28 +502,14 @@ class TaskAgent(BaseAgent):
                 else:
                     lines.append(f"\n<b>{project}</b>")
                 for t in tasks:
-                    parts = [t.get("title", "?")]
-                    if t.get("status"):
-                        parts.append(t["status"])
-                    if t.get("due"):
-                        parts.append(f"scad: {t['due']}")
-                    if t.get("priority"):
-                        parts.append(t["priority"])
-                    lines.append(f"- {' | '.join(parts)}")
+                    lines.append(self._format_task_line(t))
 
             # Tasks without project at the end
             no_project = by_project.get("Senza progetto", [])
             if no_project:
                 lines.append("\nSenza progetto:")
                 for t in no_project:
-                    parts = [t.get("title", "?")]
-                    if t.get("status"):
-                        parts.append(t["status"])
-                    if t.get("due"):
-                        parts.append(f"scad: {t['due']}")
-                    if t.get("priority"):
-                        parts.append(t["priority"])
-                    lines.append(f"- {' | '.join(parts)}")
+                    lines.append(self._format_task_line(t))
         else:
             # No projects - flat list grouped by status
             by_status_tasks: dict[str, list[dict]] = {}
@@ -513,12 +520,7 @@ class TaskAgent(BaseAgent):
             for status, tasks in by_status_tasks.items():
                 lines.append(f"\n{status}:")
                 for t in tasks:
-                    parts = [t.get("title", "?")]
-                    if t.get("due"):
-                        parts.append(f"scad: {t['due']}")
-                    if t.get("priority"):
-                        parts.append(t["priority"])
-                    lines.append(f"- {' | '.join(parts)}")
+                    lines.append(self._format_task_line(t))
 
         return "\n".join(lines)
 
