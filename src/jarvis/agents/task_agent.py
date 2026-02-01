@@ -378,12 +378,13 @@ class TaskAgent(BaseAgent):
                 relation_prop = name
                 break
 
-        # Collect all relation IDs to resolve in batch
+        # Collect relation IDs to resolve in batch
+        # Only for tasks with <=3 relation IDs (task→project, not project→tasks)
         all_relation_ids = set()
         if relation_prop:
             for t in tasks:
                 rel_ids = t.get(relation_prop, [])
-                if isinstance(rel_ids, list):
+                if isinstance(rel_ids, list) and 0 < len(rel_ids) <= 3:
                     all_relation_ids.update(rel_ids)
 
         # Resolve relation titles in batch (now returns {id: {title, url}})
@@ -411,9 +412,11 @@ class TaskAgent(BaseAgent):
                 summary["priority"] = t.get(priority_prop[0])
 
             # Resolve project/relation name and URL
+            # Skip relations with many IDs (>3) — those are one-to-many
+            # (e.g. project→tasks), not the task→project we want.
             if relation_prop:
                 rel_ids = t.get(relation_prop, [])
-                if isinstance(rel_ids, list) and rel_ids:
+                if isinstance(rel_ids, list) and 0 < len(rel_ids) <= 3:
                     project_parts = []
                     project_urls = []
                     for rid in rel_ids:
