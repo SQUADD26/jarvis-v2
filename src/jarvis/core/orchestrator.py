@@ -18,6 +18,23 @@ logger = get_logger(__name__)
 # Semaphore to limit concurrent fact extraction tasks
 _fact_extraction_semaphore = asyncio.Semaphore(3)
 
+# Prompt for query enrichment
+ENRICH_QUERY_PROMPT = """Sei un sistema di riscrittura query. Il tuo compito è rendere la query dell'utente AUTOSUFFICIENTE aggiungendo il contesto mancante dalla conversazione recente.
+
+REGOLE:
+1. Se la query è già chiara e autosufficiente, restituiscila IDENTICA
+2. Se la query contiene riferimenti impliciti (pronomi, "lì", "quello", ecc.), risolvi i riferimenti usando la cronologia
+3. Aggiungi SOLO informazioni di contesto essenziali (luogo, persona, argomento)
+4. NON aggiungere interpretazioni, opinioni o dettagli non presenti nella conversazione
+5. Rispondi SOLO con la query riscritta, nient'altro
+
+CRONOLOGIA RECENTE:
+{history}
+
+QUERY ATTUALE: {query}
+
+QUERY RISCRITTA:"""
+
 # System prompt for Jarvis
 JARVIS_SYSTEM_PROMPT = """Sei JARVIS, l'assistente personale AI.
 
@@ -64,9 +81,11 @@ REGOLE FONDAMENTALI:
    - Se l'utente chiede di una persona, usa le proprietà e relazioni note
    - NON inventare dettagli non presenti nelle entità
 
-FORMATTAZIONE TELEGRAM:
+FORMATTAZIONE (OBBLIGATORIA - USA SOLO HTML):
 - <b>grassetto</b> per enfasi importante
 - <i>corsivo</i> per dettagli secondari
+- Per elenchi puntati usa: - oppure numeri (1. 2. 3.)
+- MAI usare Markdown: NO **, NO *, NO ##, NO __, NO ```
 - Scrivi naturale, non schematico
 
 MEMORIA UTENTE (contesto storico, NON azioni appena eseguite):
@@ -147,6 +166,50 @@ async def load_memory(state: JarvisState) -> JarvisState:
         "memory_context": facts,
         "entity_context": entities
     }
+
+
+async def enrich_query(state: JarvisState) -> JarvisState:
+    """Enrich user query with conversational context to make it self-contained."""
+    messages = state.get("messages", [])
+    current_input = state["current_input"]
+
+    # Skip enrichment if no meaningful history
+    if len(messages) <= 1:
+        return {**state, "enriched_input": current_input}
+
+    try:
+        # Take last 4 messages (excluding current), truncate to 300 chars each
+        history_messages = messages[:-1][-4:]
+        history_lines = []
+        for msg in history_messages:
+            role = "Utente" if isinstance(msg, HumanMessage) else "Assistente"
+            content = msg.content[:300]
+            history_lines.append(f"{role}: {content}")
+
+        history_str = "\n".join(history_lines)
+
+        prompt = ENRICH_QUERY_PROMPT.format(
+            history=history_str,
+            query=current_input
+        )
+
+        enriched = await gemini.generate(
+            prompt,
+            system_instruction="Riscrivi la query in modo autosufficiente. Rispondi SOLO con la query riscritta.",
+            model="gemini-2.5-flash",
+            temperature=0,
+            max_tokens=256
+        )
+
+        if enriched and enriched.strip():
+            enriched = enriched.strip()
+            logger.info(f"Query enriched: '{current_input}' -> '{enriched}'")
+            return {**state, "enriched_input": enriched}
+
+    except Exception as e:
+        logger.warning(f"Query enrichment failed, using original: {e}")
+
+    return {**state, "enriched_input": current_input}
 
 
 async def check_freshness(state: JarvisState) -> JarvisState:
@@ -338,6 +401,7 @@ def build_graph() -> StateGraph:
     # Add nodes
     graph.add_node("analyze_intent", analyze_intent)
     graph.add_node("load_memory", load_memory)
+    graph.add_node("enrich_query", enrich_query)
     graph.add_node("check_freshness", check_freshness)
     graph.add_node("execute_agents", execute_agents)
     graph.add_node("generate_response", generate_response)
@@ -352,10 +416,11 @@ def build_graph() -> StateGraph:
         "load_memory",
         should_use_agents,
         {
-            "use_agents": "check_freshness",
+            "use_agents": "enrich_query",
             "direct_response": "generate_response"
         }
     )
+    graph.add_edge("enrich_query", "check_freshness")
     graph.add_edge("check_freshness", "execute_agents")
     graph.add_edge("execute_agents", "generate_response")
     graph.add_edge("generate_response", "extract_facts")
@@ -381,6 +446,7 @@ async def process_message(user_id: str, message: str, history: list = None) -> s
         "user_id": user_id,
         "messages": messages,
         "current_input": message,
+        "enriched_input": message,
         "intent": "",
         "intent_confidence": 0.0,
         "required_agents": [],

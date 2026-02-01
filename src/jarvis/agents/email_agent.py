@@ -155,7 +155,7 @@ class EmailAgent(BaseAgent):
 
     async def _execute(self, state: JarvisState) -> Any:
         """Execute email operations using LLM reasoning."""
-        user_input = state["current_input"]
+        user_input = state.get("enriched_input", state["current_input"])
         user_id = state["user_id"]
         self._current_user_id = user_id  # Store for tool methods
 

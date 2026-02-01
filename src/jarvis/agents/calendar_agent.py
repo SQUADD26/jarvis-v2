@@ -230,7 +230,7 @@ class CalendarAgent(BaseAgent):
 
     async def _execute(self, state: JarvisState) -> Any:
         """Execute calendar operations with intelligent two-step workflow."""
-        user_input = state["current_input"]
+        user_input = state.get("enriched_input", state["current_input"])
         user_id = state["user_id"]
         messages = state.get("messages", [])
         self._current_user_id = user_id

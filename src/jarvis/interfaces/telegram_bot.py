@@ -17,6 +17,7 @@ ACKNOWLEDGMENT_MESSAGES = [
 
 from jarvis.config import get_settings
 from jarvis.core.orchestrator import process_message
+from jarvis.utils.formatting import format_for_telegram
 from jarvis.core.freshness import freshness
 from jarvis.core.memory import memory
 from jarvis.db.repositories import ChatRepository, TaskRepository, LLMLogsRepository
@@ -434,7 +435,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
 
-        await update.message.reply_text(response, parse_mode="HTML")
+        try:
+            formatted = format_for_telegram(response)
+            await update.message.reply_text(formatted, parse_mode="HTML")
+        except Exception:
+            logger.warning("HTML formatting failed for voice response, sending as plain text")
+            await update.message.reply_text(response)
 
     except Exception as e:
         logger.error(f"Error processing voice message: {e}", exc_info=True)
@@ -609,8 +615,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass  # Ignore if we can't delete (e.g., message too old)
 
-        # Send response with HTML parsing
-        await update.message.reply_text(response, parse_mode="HTML")
+        # Send response with HTML parsing (with plain text fallback)
+        try:
+            formatted = format_for_telegram(response)
+            await update.message.reply_text(formatted, parse_mode="HTML")
+        except Exception:
+            logger.warning("HTML formatting failed, sending as plain text")
+            await update.message.reply_text(response)
 
     except Exception as e:
         logger.error(f"Error processing message: {e}", exc_info=True)

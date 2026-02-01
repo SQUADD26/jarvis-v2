@@ -2,6 +2,7 @@
 
 import httpx
 from jarvis.config import get_settings
+from jarvis.utils.formatting import format_for_telegram
 from jarvis.utils.logging import get_logger
 
 logger = get_logger(__name__)
@@ -29,12 +30,14 @@ class TelegramNotifier:
     ) -> bool:
         """Send a message to a Telegram chat."""
         try:
+            # Format text for Telegram HTML
+            formatted_text = format_for_telegram(text) if parse_mode == "HTML" else text
             client = await self._get_client()
             response = await client.post(
                 f"{self.base_url}/sendMessage",
                 json={
                     "chat_id": chat_id,
-                    "text": text,
+                    "text": formatted_text,
                     "parse_mode": parse_mode
                 }
             )
@@ -43,6 +46,17 @@ class TelegramNotifier:
             return True
         except Exception as e:
             logger.error(f"Failed to send notification to {chat_id}: {e}")
+            # Retry without HTML if formatting failed
+            if parse_mode == "HTML":
+                try:
+                    response = await client.post(
+                        f"{self.base_url}/sendMessage",
+                        json={"chat_id": chat_id, "text": text}
+                    )
+                    response.raise_for_status()
+                    return True
+                except Exception:
+                    pass
             return False
 
     async def notify_task_started(self, user_id: str, task_type: str, description: str = None):

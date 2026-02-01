@@ -86,7 +86,7 @@ class KnowledgeGraphAgent(BaseAgent):
     async def _execute(self, state: JarvisState) -> Any:
         """Execute knowledge graph queries using LLM reasoning."""
         user_id = state["user_id"]
-        user_input = state["current_input"]
+        user_input = state.get("enriched_input", state["current_input"])
 
         # Format tools for prompt
         tools_str = json.dumps(KG_TOOLS, indent=2, ensure_ascii=False)

@@ -84,7 +84,7 @@ class RAGAgent(BaseAgent):
 
     async def _execute(self, state: JarvisState) -> Any:
         """Execute RAG operations using LLM reasoning."""
-        user_input = state["current_input"]
+        user_input = state.get("enriched_input", state["current_input"])
         user_id = state["user_id"]
         messages = state.get("messages", [])
 

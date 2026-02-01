@@ -69,7 +69,7 @@ class WebAgent(BaseAgent):
 
     async def _execute(self, state: JarvisState) -> Any:
         """Execute web operations using LLM reasoning."""
-        user_input = state["current_input"]
+        user_input = state.get("enriched_input", state["current_input"])
 
         # Format tools for prompt
         tools_str = json.dumps(WEB_TOOLS, indent=2, ensure_ascii=False)

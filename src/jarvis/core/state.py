@@ -20,6 +20,7 @@ class JarvisState(TypedDict):
     # Conversation
     messages: Annotated[list[BaseMessage], add_messages]
     current_input: str
+    enriched_input: str  # Query arricchita con contesto conversazionale
 
     # Intent analysis
     intent: str  # "calendar_read", "email_write", "complex", etc.
