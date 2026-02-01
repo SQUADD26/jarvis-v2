@@ -355,12 +355,36 @@ class TaskAgent(BaseAgent):
         else:
             return {"error": f"Tool sconosciuto: {tool_name}"}
 
-    def _summarize_tasks(self, tasks: list[dict], schema: dict) -> list[dict]:
+    async def _summarize_tasks(self, tasks: list[dict], schema: dict) -> list[dict]:
         """Distill raw Notion page data into compact task summaries."""
         title_prop = self._find_property_by_role(schema, "title")
         status_prop = self._find_property_by_role(schema, "status")
         date_prop = self._find_property_by_role(schema, "date")
         priority_prop = self._find_property_by_role(schema, "priority")
+
+        # Find relation properties (e.g. "Progetto")
+        relation_prop = None
+        props = schema.get("properties", {})
+        for name, info in props.items():
+            if info["type"] == "relation":
+                relation_prop = name
+                break
+
+        # Collect all relation IDs to resolve in batch
+        all_relation_ids = set()
+        if relation_prop:
+            for t in tasks:
+                rel_ids = t.get(relation_prop, [])
+                if isinstance(rel_ids, list):
+                    all_relation_ids.update(rel_ids)
+
+        # Resolve relation titles in batch
+        relation_titles = {}
+        if all_relation_ids:
+            try:
+                relation_titles = await notion_client.resolve_relation_titles(list(all_relation_ids))
+            except Exception as e:
+                logger.warning(f"Failed to resolve relation titles: {e}")
 
         summaries = []
         for t in tasks:
@@ -378,8 +402,15 @@ class TaskAgent(BaseAgent):
             if priority_prop:
                 summary["priority"] = t.get(priority_prop[0])
 
+            # Resolve project/relation name
+            if relation_prop:
+                rel_ids = t.get(relation_prop, [])
+                if isinstance(rel_ids, list) and rel_ids:
+                    project_names = [relation_titles.get(rid, "") for rid in rel_ids if relation_titles.get(rid)]
+                    if project_names:
+                        summary["project"] = ", ".join(project_names)
+
             # Include assignee if present (people property)
-            props = schema.get("properties", {})
             for name, info in props.items():
                 if info["type"] == "people" and t.get(name):
                     summary["assignee"] = t[name]
@@ -391,21 +422,20 @@ class TaskAgent(BaseAgent):
     def _build_text_digest(self, summaries: list[dict], db_title: str = "") -> str:
         """Build a pre-formatted text digest of tasks for the LLM.
 
-        Instead of dumping raw JSON, produce a structured summary that
-        the orchestrator LLM can relay almost verbatim.
+        Groups tasks by project (if available), then by status.
         """
         if not summaries:
             return "Nessuna task trovata."
 
         total = len(summaries)
 
-        # Group by status
-        by_status: dict[str, list[dict]] = {}
+        # Count by status
+        by_status: dict[str, int] = {}
         for s in summaries:
             status = s.get("status") or "Senza stato"
-            by_status.setdefault(status, []).append(s)
+            by_status[status] = by_status.get(status, 0) + 1
 
-        # Group by priority
+        # Count by priority
         by_priority: dict[str, int] = {}
         for s in summaries:
             prio = s.get("priority") or "Senza priorita"
@@ -419,8 +449,8 @@ class TaskAgent(BaseAgent):
 
         # Status breakdown
         lines.append("Per stato:")
-        for status, tasks in by_status.items():
-            lines.append(f"  - {status}: {len(tasks)}")
+        for status, count in by_status.items():
+            lines.append(f"  - {status}: {count}")
 
         # Priority breakdown if available
         if any(s.get("priority") for s in summaries):
@@ -429,22 +459,44 @@ class TaskAgent(BaseAgent):
             for prio, count in sorted(by_priority.items()):
                 lines.append(f"  - {prio}: {count}")
 
-        # List ALL tasks grouped by status
-        lines.append("")
-        for status, tasks in by_status.items():
-            lines.append(f"\n--- {status} ({len(tasks)}) ---")
-            for t in tasks:
-                parts = [t.get("title", "?")]
-                if t.get("due"):
-                    parts.append(f"scad: {t['due']}")
-                if t.get("assignee"):
-                    assignee = t["assignee"]
-                    if isinstance(assignee, list):
-                        assignee = ", ".join(str(a) for a in assignee)
-                    parts.append(f"→ {assignee}")
-                if t.get("priority"):
-                    parts.append(f"[{t['priority']}]")
-                lines.append(f"  - {' | '.join(parts)}")
+        # Group tasks by project, then list
+        has_projects = any(s.get("project") for s in summaries)
+
+        if has_projects:
+            by_project: dict[str, list[dict]] = {}
+            for s in summaries:
+                proj = s.get("project") or "Senza progetto"
+                by_project.setdefault(proj, []).append(s)
+
+            lines.append("")
+            for project, tasks in sorted(by_project.items()):
+                lines.append(f"\n[{project}] ({len(tasks)} task)")
+                for t in tasks:
+                    parts = [t.get("title", "?")]
+                    if t.get("status"):
+                        parts.append(t["status"])
+                    if t.get("due"):
+                        parts.append(f"scad: {t['due']}")
+                    if t.get("priority"):
+                        parts.append(f"[{t['priority']}]")
+                    lines.append(f"  - {' | '.join(parts)}")
+        else:
+            # No projects - group by status
+            by_status_tasks: dict[str, list[dict]] = {}
+            for s in summaries:
+                status = s.get("status") or "Senza stato"
+                by_status_tasks.setdefault(status, []).append(s)
+
+            lines.append("")
+            for status, tasks in by_status_tasks.items():
+                lines.append(f"\n--- {status} ({len(tasks)}) ---")
+                for t in tasks:
+                    parts = [t.get("title", "?")]
+                    if t.get("due"):
+                        parts.append(f"scad: {t['due']}")
+                    if t.get("priority"):
+                        parts.append(f"[{t['priority']}]")
+                    lines.append(f"  - {' | '.join(parts)}")
 
         return "\n".join(lines)
 
@@ -620,7 +672,7 @@ class TaskAgent(BaseAgent):
                             )
                         ]
 
-            summaries = self._summarize_tasks(tasks, schema)
+            summaries = await self._summarize_tasks(tasks, schema)
 
             # Find database title for the digest
             db_title = ""

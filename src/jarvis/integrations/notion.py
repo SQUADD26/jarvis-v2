@@ -167,6 +167,45 @@ class NotionClient:
                 results.append(self.format_page_properties(item))
         return results
 
+    async def get_page_title(self, page_id: str) -> str:
+        """Get just the title of a page by ID."""
+        data = await self._request("GET", f"/pages/{page_id}")
+        for prop in data.get("properties", {}).values():
+            if prop.get("type") == "title":
+                return "".join(t.get("plain_text", "") for t in prop.get("title", []))
+        return ""
+
+    async def resolve_relation_titles(self, page_ids: list[str]) -> dict[str, str]:
+        """Resolve a batch of page IDs to their titles. Returns {id: title}."""
+        if not page_ids:
+            return {}
+
+        # Check Redis cache first
+        cache_key = "jarvis:notion:page_titles"
+        cached = await redis_client.get(cache_key) or {}
+
+        missing = [pid for pid in page_ids if pid not in cached]
+        if missing:
+            # Fetch missing titles in parallel (max 10 concurrent)
+            sem = asyncio.Semaphore(10)
+
+            async def fetch(pid):
+                async with sem:
+                    try:
+                        title = await self.get_page_title(pid)
+                        return pid, title
+                    except Exception:
+                        return pid, ""
+
+            results = await asyncio.gather(*(fetch(pid) for pid in set(missing)))
+            for pid, title in results:
+                cached[pid] = title
+
+            # Cache for 1 hour
+            await redis_client.set(cache_key, cached, 3600)
+
+        return {pid: cached.get(pid, "") for pid in page_ids}
+
     # ── Create / Update / Archive ───────────────────────────────────
 
     async def create_page(self, db_id: str, properties: dict) -> dict:
