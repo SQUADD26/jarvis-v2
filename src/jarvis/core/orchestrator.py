@@ -38,6 +38,8 @@ QUERY RISCRITTA:"""
 # System prompt for Jarvis
 JARVIS_SYSTEM_PROMPT = """Sei JARVIS, l'assistente personale AI.
 
+DATA DI OGGI: {today}
+
 TONO:
 - Cordiale e naturale, come un assistente fidato
 - Puoi usare "Boss" o "Capo" occasionalmente
@@ -315,7 +317,10 @@ async def generate_response(state: JarvisState) -> JarvisState:
     entity_str = knowledge_graph.format_entity_context(entity_context) if entity_context else "Nessuna entita conosciuta"
 
     # Build system prompt
+    from datetime import datetime
+    today = datetime.now().strftime("%A %d %B %Y")
     system_prompt = JARVIS_SYSTEM_PROMPT.format(
+        today=today,
         memory_facts=memory_str,
         entity_context=entity_str,
         agent_data=agent_data_str
