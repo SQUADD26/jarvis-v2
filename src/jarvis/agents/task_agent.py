@@ -477,23 +477,12 @@ class TaskAgent(BaseAgent):
                             )
                         ]
 
-            total_count = len(tasks)
-            # Hard cap: return max 25 tasks to keep LLM context manageable
-            MAX_RESULTS = 25
-            truncated = total_count > MAX_RESULTS
-            if truncated:
-                tasks = tasks[:MAX_RESULTS]
-
             summaries = self._summarize_tasks(tasks, schema)
-            result = {
+            return {
                 "operation": "query_tasks",
                 "tasks": summaries,
                 "count": len(summaries),
-                "total": total_count,
             }
-            if truncated:
-                result["note"] = f"Mostrate {MAX_RESULTS} di {total_count} task. Usa filtri per restringere."
-            return result
         except Exception as e:
             self.logger.error(f"query_tasks failed: {e}")
             return {"error": f"Errore nella query: {e}"}
