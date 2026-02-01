@@ -1,5 +1,6 @@
 """Task agent - LLM-powered CRUD for Notion tasks."""
 
+import asyncio
 from datetime import datetime, timedelta
 from typing import Any
 import json
@@ -20,8 +21,21 @@ TASK_TOOLS = [
         "parameters": {},
     },
     {
+        "name": "query_all_tasks",
+        "description": "Mostra le task da TUTTI i database. Usa questo per richieste generiche tipo 'le mie task', 'mostra task', 'cosa devo fare'.",
+        "parameters": {
+            "status": "Filtra per stato (opzionale)",
+            "due_before": "Scadenza prima di YYYY-MM-DD (opzionale)",
+            "due_after": "Scadenza dopo YYYY-MM-DD (opzionale)",
+            "text": "Filtra per testo nel titolo (opzionale)",
+            "assignee": "Nome dell'assegnatario (opzionale, default: utente corrente)",
+            "all_assignees": "true per vedere task di TUTTI (opzionale)",
+            "include_done": "true per includere task completate (opzionale, default: false)",
+        },
+    },
+    {
         "name": "query_tasks",
-        "description": "Cerca task in un database con filtri opzionali. Per default esclude le task completate/done.",
+        "description": "Cerca task in UN SINGOLO database specifico. Usa solo quando l'utente specifica quale database.",
         "parameters": {
             "database_id": "ID del database Notion",
             "status": "Filtra per stato (opzionale)",
@@ -87,23 +101,23 @@ TOOL DISPONIBILI:
 {tools}
 
 REGOLE:
-1. Se l'utente chiede di vedere/elencare task, usa query_tasks con il database corretto
-2. Se c'e un solo database, usalo sempre senza chiedere
-3. Se ci sono piu database, scegli quello piu appropriato dal contesto (es. "task di lavoro" → database Lavoro)
-4. Per completare una task per nome, usa complete_task con title_search
-5. Per creare task, inferisci il database dal contesto
-6. Usa le proprieta disponibili nel database (status, priority, date, ecc.)
-7. Se una proprieta non esiste nel database, ignorala silenziosamente
-8. "le mie task", "mostra task", senza specificare chi → filtra SOLO le task assegnate a {user_name}
-9. Se l'utente chiede task di qualcun altro o di tutti, NON filtrare per assegnatario
+1. Richieste GENERICHE ("le mie task", "mostra task", "cosa devo fare") → usa SEMPRE query_all_tasks
+2. Richieste SPECIFICHE per un database ("task personali", "task del progetto X") → usa query_tasks con il database_id corretto
+3. Per completare una task per nome, usa complete_task con title_search
+4. Per creare task, inferisci il database dal contesto
+5. Usa le proprieta disponibili nel database (status, priority, date, ecc.)
+6. Se una proprieta non esiste nel database, ignorala silenziosamente
+7. "le mie task", "mostra task", senza specificare chi → filtra SOLO le task assegnate a {user_name}
+8. Se l'utente chiede task di qualcun altro o di tutti, usa all_assignees=true
 
 FORMATO OUTPUT: Solo JSON valido
 - Singola operazione: {{"tool": "nome", "params": {{...}}}}
 - Se non serve alcuna azione: {{"tool": "none", "message": "spiegazione"}}
 
 ESEMPI:
-- "mostra le mie task" → {{"tool": "query_tasks", "params": {{"database_id": "DB_ID"}}}}
-- "task in scadenza" → {{"tool": "query_tasks", "params": {{"database_id": "DB_ID", "due_before": "{in_7_days}"}}}}
+- "mostra le mie task" → {{"tool": "query_all_tasks", "params": {{}}}}
+- "le mie task personali" → {{"tool": "query_tasks", "params": {{"database_id": "ID_DB_TASK_PERSONALI"}}}}
+- "task in scadenza" → {{"tool": "query_all_tasks", "params": {{"due_before": "{in_7_days}"}}}}
 - "crea task comprare latte" → {{"tool": "create_task", "params": {{"database_id": "DB_ID", "title": "Comprare latte"}}}}
 - "completa la task report" → {{"tool": "complete_task", "params": {{"title_search": "report", "database_id": "DB_ID"}}}}
 - "cerca budget" → {{"tool": "search_tasks", "params": {{"query": "budget"}}}}
@@ -326,6 +340,8 @@ class TaskAgent(BaseAgent):
         """Execute the selected tool."""
         if tool_name == "list_databases":
             return await self._tool_list_databases()
+        elif tool_name == "query_all_tasks":
+            return await self._tool_query_all_tasks(params)
         elif tool_name == "query_tasks":
             return await self._tool_query_tasks(params)
         elif tool_name == "create_task":
@@ -444,6 +460,49 @@ class TaskAgent(BaseAgent):
         except Exception as e:
             self.logger.error(f"list_databases failed: {e}")
             return {"error": f"Errore nel recupero database: {e}"}
+
+    async def _tool_query_all_tasks(self, params: dict) -> dict:
+        """Query tasks across ALL configured databases in parallel."""
+        try:
+            databases, _ = await self._get_databases_info()
+            if not databases:
+                return {"error": "Nessun database configurato"}
+
+            # Query all databases in parallel
+            async def query_db(db):
+                db_params = {**params, "database_id": db["id"]}
+                return db, await self._tool_query_tasks(db_params)
+
+            results = await asyncio.gather(*(query_db(db) for db in databases), return_exceptions=True)
+
+            all_digests = []
+            total_count = 0
+
+            for item in results:
+                if isinstance(item, Exception):
+                    self.logger.error(f"query_all_tasks parallel error: {item}")
+                    continue
+                db, result = item
+                if result.get("error"):
+                    all_digests.append(f"Database: {db['title']}\nErrore: {result['error']}")
+                    continue
+                count = result.get("count", 0)
+                total_count += count
+                if count > 0:
+                    all_digests.append(result.get("digest", f"{db['title']}: {count} task"))
+
+            if not all_digests:
+                return {"operation": "query_all_tasks", "digest": "Nessuna task trovata.", "count": 0}
+
+            full_digest = f"RIEPILOGO TOTALE: {total_count} task attive\n\n" + "\n\n---\n\n".join(all_digests)
+            return {
+                "operation": "query_all_tasks",
+                "digest": full_digest,
+                "count": total_count,
+            }
+        except Exception as e:
+            self.logger.error(f"query_all_tasks failed: {e}")
+            return {"error": f"Errore nella query: {e}"}
 
     async def _tool_query_tasks(self, params: dict) -> dict:
         """Query tasks with filters."""
