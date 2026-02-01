@@ -297,6 +297,39 @@ class TaskAgent(BaseAgent):
         else:
             return {"error": f"Tool sconosciuto: {tool_name}"}
 
+    def _summarize_tasks(self, tasks: list[dict], schema: dict) -> list[dict]:
+        """Distill raw Notion page data into compact task summaries."""
+        title_prop = self._find_property_by_role(schema, "title")
+        status_prop = self._find_property_by_role(schema, "status")
+        date_prop = self._find_property_by_role(schema, "date")
+        priority_prop = self._find_property_by_role(schema, "priority")
+
+        summaries = []
+        for t in tasks:
+            summary = {"id": t.get("id", "")}
+            if title_prop:
+                summary["title"] = t.get(title_prop[0], "Senza titolo")
+            if status_prop:
+                summary["status"] = t.get(status_prop[0])
+            if date_prop:
+                raw = t.get(date_prop[0])
+                if isinstance(raw, dict):
+                    summary["due"] = raw.get("start")
+                elif raw:
+                    summary["due"] = str(raw)
+            if priority_prop:
+                summary["priority"] = t.get(priority_prop[0])
+
+            # Include assignee if present (people property)
+            props = schema.get("properties", {})
+            for name, info in props.items():
+                if info["type"] == "people" and t.get(name):
+                    summary["assignee"] = t[name]
+                    break
+
+            summaries.append(summary)
+        return summaries
+
     async def _tool_list_databases(self) -> dict:
         """List available Notion databases."""
         try:
@@ -374,10 +407,11 @@ class TaskAgent(BaseAgent):
                         if text_filter in str(t.get(title_name, "")).lower()
                     ]
 
+            summaries = self._summarize_tasks(tasks, schema)
             return {
                 "operation": "query_tasks",
-                "tasks": tasks,
-                "count": len(tasks),
+                "tasks": summaries,
+                "count": len(summaries),
             }
         except Exception as e:
             self.logger.error(f"query_tasks failed: {e}")
