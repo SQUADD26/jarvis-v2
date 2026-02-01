@@ -477,9 +477,9 @@ class TaskAgent(BaseAgent):
                     continue
                 url = project_urls.get(project, "")
                 if url:
-                    lines.append(f"\n{project} ({url})")
+                    lines.append(f"\n<a href=\"{url}\">{project}</a>")
                 else:
-                    lines.append(f"\n{project}")
+                    lines.append(f"\n<b>{project}</b>")
                 for t in tasks:
                     parts = [t.get("title", "?")]
                     if t.get("status"):
@@ -584,14 +584,15 @@ class TaskAgent(BaseAgent):
 
             parts = []
             if work_digests:
-                parts.append(f"[TASK_LAVORO]\nHai {work_count} task attive per i clienti.\n\n" + "\n\n".join(work_digests))
+                parts.append(f"Hai {work_count} task attive per i clienti.\n\n" + "\n\n".join(work_digests))
             if personal_digests:
-                parts.append(f"[TASK_PERSONALI]\nHai {personal_count} task personali.\n\n" + "\n\n".join(personal_digests))
+                parts.append(f"Hai {personal_count} task personali.\n\n" + "\n\n".join(personal_digests))
 
             if not parts:
                 return "Nessuna task trovata."
 
-            return "\n\n".join(parts)
+            # Use --- separator so Telegram splits into separate messages
+            return "\n\n---\n\n".join(parts)
         except Exception as e:
             self.logger.error(f"query_all_tasks failed: {e}")
             return f"Errore nel recupero task: {e}"
