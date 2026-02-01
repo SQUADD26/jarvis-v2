@@ -3,6 +3,7 @@ from jarvis.integrations.google_calendar import calendar_client, GoogleCalendarC
 from jarvis.integrations.gmail import gmail_client, GmailClient
 from jarvis.integrations.perplexity import perplexity, PerplexityClient
 from jarvis.integrations.crawl4ai_client import crawler, Crawl4AIClient
+from jarvis.integrations.notion import notion_client, NotionClient
 
 __all__ = [
     "gemini",
@@ -15,4 +16,6 @@ __all__ = [
     "PerplexityClient",
     "crawler",
     "Crawl4AIClient",
+    "notion_client",
+    "NotionClient",
 ]

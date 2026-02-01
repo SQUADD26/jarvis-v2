@@ -6,7 +6,7 @@ from jarvis.utils.logging import get_logger
 logger = get_logger(__name__)
 
 TaskStatus = Literal["pending", "claimed", "running", "completed", "failed", "cancelled"]
-TaskType = Literal["reminder", "scheduled_check", "long_running"]
+TaskType = Literal["reminder", "scheduled_check", "long_running", "notion_proactive_check"]
 
 
 class ChatRepository:

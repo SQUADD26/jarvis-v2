@@ -12,7 +12,8 @@ AGENT_CAPABILITIES = {
     "email": "Accesso a Gmail: leggere email, scrivere email, creare bozze, rispondere, cercare messaggi",
     "web": "Ricerca web: cercare informazioni online, meteo, notizie, fatti attuali",
     "rag": "Knowledge base personale: cercare nei documenti dell'utente, file caricati, note",
-    "kg": "Knowledge graph personale: informazioni su persone, organizzazioni, colleghi, relazioni. Domande come 'chi e X?', 'chi sono i miei colleghi?', 'per chi lavora X?', 'dimmi di piu su Y'"
+    "kg": "Knowledge graph personale: informazioni su persone, organizzazioni, colleghi, relazioni. Domande come 'chi e X?', 'chi sono i miei colleghi?', 'per chi lavora X?', 'dimmi di piu su Y'",
+    "task": "Gestione task su Notion: leggere, creare, aggiornare, completare task. Database multipli (personale, lavoro, progetti). Scadenze, priorita, stati."
 }
 
 PLANNER_PROMPT = """Sei un planner che decide quali agenti attivare per rispondere alla richiesta dell'utente.
@@ -54,6 +55,11 @@ ESEMPI:
 - "per chi lavora Giovanni?" → agents: ["kg"]
 - "quali persone conosco?" → agents: ["kg"]
 - "chi e il mio capo?" → agents: ["kg"]
+- "mostra le mie task" → agents: ["task"]
+- "che task ho in scadenza?" → agents: ["task"]
+- "crea task comprare latte" → agents: ["task"]
+- "completa la task report" → agents: ["task"]
+- "segna come fatta la task X" → agents: ["task"]
 
 Rispondi SOLO con un JSON valido:
 {{"agents": ["agent1", "agent2"], "reasoning": "breve spiegazione"}}

@@ -47,6 +47,9 @@ class Settings(BaseSettings):
     default_model: str = "gemini-2.5-flash"  # Upgraded from 2.0
     powerful_model: str = "gemini-2.5-pro-preview-05-06"
 
+    # Notion
+    notion_api_key: str = Field(default="", alias="NOTION_API_KEY")
+
     # Apify (Google Search Scraper)
     apify_api_key: str = Field(default="", alias="APIFY_API_KEY")
 

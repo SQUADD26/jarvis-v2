@@ -58,6 +58,7 @@ class TaskExecutor:
             "long_running": self._handle_long_running,
             "rag_ingest": self._handle_rag_ingest,
             "rag_deep_crawl": self._handle_rag_deep_crawl,
+            "notion_proactive_check": self._handle_notion_proactive_check,
         }
         return handlers.get(task_type, self._handle_unknown)
 
@@ -252,51 +253,51 @@ class TaskExecutor:
 
         try:
             for page in valid_pages:
-            page_url = page.get("url", "")
-            page_title = page.get("title", "")
+                page_url = page.get("url", "")
+                page_title = page.get("title", "")
 
-            # Chunk this page's content
-            chunk_metadata = {
-                "page_url": page_url,
-                "page_title": page_title,
-                "crawl_depth": page.get("depth", 0)
-            }
-            page_chunks = chunker.chunk_text(page["content"], chunk_metadata)
+                # Chunk this page's content
+                chunk_metadata = {
+                    "page_url": page_url,
+                    "page_title": page_title,
+                    "crawl_depth": page.get("depth", 0)
+                }
+                page_chunks = chunker.chunk_text(page["content"], chunk_metadata)
 
-            if not page_chunks:
-                continue
+                if not page_chunks:
+                    continue
 
-            # Generate embeddings
-            texts = [c.content for c in page_chunks]
-            embeddings = await openai_embeddings.embed_batch(texts)
+                # Generate embeddings
+                texts = [c.content for c in page_chunks]
+                embeddings = await openai_embeddings.embed_batch(texts)
 
-            # Prepare records - all linked to the SAME source
-            records = []
-            for chunk, embedding in zip(page_chunks, embeddings):
-                records.append({
-                    "source_id": source_id,
-                    "user_id": user_id,
-                    "content": chunk.content,
-                    "chunk_index": chunk_index,
-                    "embedding": embedding,
-                    "start_char": chunk.start_char,
-                    "end_char": chunk.end_char,
-                    "metadata": {
-                        **chunk.metadata,
-                        "page_url": page_url,
-                        "page_title": page_title
-                    }
-                })
-                chunk_index += 1
+                # Prepare records - all linked to the SAME source
+                records = []
+                for chunk, embedding in zip(page_chunks, embeddings):
+                    records.append({
+                        "source_id": source_id,
+                        "user_id": user_id,
+                        "content": chunk.content,
+                        "chunk_index": chunk_index,
+                        "embedding": embedding,
+                        "start_char": chunk.start_char,
+                        "end_char": chunk.end_char,
+                        "metadata": {
+                            **chunk.metadata,
+                            "page_url": page_url,
+                            "page_title": page_title
+                        }
+                    })
+                    chunk_index += 1
 
-            # Batch insert chunks
-            try:
-                result = db.table("rag_chunks").insert(records).execute()
-                total_chunks += len(result.data) if result.data else 0
-            except Exception as e:
-                logger.error(f"Failed to store chunks for {page_url}: {e}")
-                ingestion_failed = True
-                break
+                # Batch insert chunks
+                try:
+                    result = db.table("rag_chunks").insert(records).execute()
+                    total_chunks += len(result.data) if result.data else 0
+                except Exception as e:
+                    logger.error(f"Failed to store chunks for {page_url}: {e}")
+                    ingestion_failed = True
+                    break
 
         except Exception as e:
             logger.error(f"Deep crawl ingestion failed: {e}")
@@ -341,6 +342,158 @@ class TaskExecutor:
             "pages_crawled": len(valid_pages),
             "total_chunks": total_chunks
         }
+
+    async def _handle_notion_proactive_check(self, user_id: str, payload: dict) -> dict:
+        """Handle proactive Notion task check - notify about due/overdue tasks."""
+        from jarvis.integrations.notion import notion_client
+        from jarvis.integrations.gemini import gemini
+        from datetime import timedelta
+
+        RESCHEDULE_HOURS = 3
+
+        try:
+            databases = await notion_client.discover_databases()
+            if not databases:
+                logger.info(f"Notion proactive check: no databases for user {user_id}")
+                return {"type": "notion_proactive_check", "status": "no_databases"}
+
+            now = datetime.utcnow()
+            today = now.strftime("%Y-%m-%d")
+            in_7_days = (now + timedelta(days=7)).strftime("%Y-%m-%d")
+
+            actionable_tasks = {"overdue": [], "today": [], "this_week": []}
+
+            async def _check_database(db):
+                """Check a single database for actionable tasks."""
+                results = []
+                try:
+                    schema = await notion_client.get_database_schema(db["id"])
+                    props = schema.get("properties", {})
+
+                    # Find date property
+                    date_prop_name = None
+                    for name, info in props.items():
+                        if info["type"] == "date":
+                            date_prop_name = name
+                            break
+
+                    if not date_prop_name:
+                        return results
+
+                    # Build filter: date <= 7 days from now, not completed
+                    filter_obj = {
+                        "and": [
+                            {"property": date_prop_name, "date": {"on_or_before": in_7_days}},
+                            {"property": date_prop_name, "date": {"is_not_empty": True}},
+                        ]
+                    }
+
+                    # Add status filter if available (exclude completed)
+                    for name, info in props.items():
+                        if info["type"] == "status":
+                            done_options = [
+                                o for o in info.get("options", [])
+                                if o.lower() in ("done", "completato", "completata", "fatto", "fatta", "completed", "chiuso", "chiusa")
+                            ]
+                            for done_opt in done_options:
+                                filter_obj["and"].append({
+                                    "property": name,
+                                    "status": {"does_not_equal": done_opt},
+                                })
+                            break
+
+                    tasks = await notion_client.query_database(db["id"], filter_obj)
+
+                    # Find title property name
+                    title_prop_name = None
+                    for name, info in props.items():
+                        if info["type"] == "title":
+                            title_prop_name = name
+                            break
+
+                    for task in tasks:
+                        date_val = task.get(date_prop_name)
+                        if not date_val:
+                            continue
+                        due_str = date_val.get("start") if isinstance(date_val, dict) else str(date_val)
+                        if not due_str:
+                            continue
+                        task_title = task.get(title_prop_name, "Senza titolo") if title_prop_name else "Senza titolo"
+                        results.append({
+                            "title": task_title,
+                            "due": due_str,
+                            "database": db["title"],
+                        })
+                except Exception as e:
+                    logger.warning(f"Failed to query {db['title']} for proactive check: {e}")
+                return results
+
+            # Query all databases in parallel
+            db_results = await asyncio.gather(*[_check_database(db) for db in databases])
+
+            for task_list in db_results:
+                for task_info in task_list:
+                    due_str = task_info["due"]
+                    if due_str < today:
+                        actionable_tasks["overdue"].append(task_info)
+                    elif due_str == today:
+                        actionable_tasks["today"].append(task_info)
+                    else:
+                        actionable_tasks["this_week"].append(task_info)
+
+            # Only notify if there are actionable tasks
+            total = sum(len(v) for v in actionable_tasks.values())
+            if total > 0:
+                # Generate digest with LLM
+                gemini.set_user_context(user_id)
+                digest_prompt = f"""Genera un breve digest delle task in scadenza per l'utente. Sii conciso e utile.
+
+TASK SCADUTE ({len(actionable_tasks['overdue'])}):
+{chr(10).join(f"- {t['title']} (scadenza: {t['due']}, db: {t['database']})" for t in actionable_tasks['overdue']) or "Nessuna"}
+
+TASK DI OGGI ({len(actionable_tasks['today'])}):
+{chr(10).join(f"- {t['title']} (db: {t['database']})" for t in actionable_tasks['today']) or "Nessuna"}
+
+TASK QUESTA SETTIMANA ({len(actionable_tasks['this_week'])}):
+{chr(10).join(f"- {t['title']} (scadenza: {t['due']}, db: {t['database']})" for t in actionable_tasks['this_week']) or "Nessuna"}
+
+Scrivi un messaggio breve in italiano, usa emoji per rendere il tutto leggibile. Non usare markdown."""
+
+                digest = await gemini.generate(
+                    digest_prompt,
+                    model="gemini-2.5-flash",
+                    temperature=0.3,
+                )
+
+                await notifier.notify_task_completed(user_id, "📋 Task Notion", digest)
+
+            result = {
+                "type": "notion_proactive_check",
+                "overdue": len(actionable_tasks["overdue"]),
+                "today": len(actionable_tasks["today"]),
+                "this_week": len(actionable_tasks["this_week"]),
+                "notified": total > 0,
+            }
+
+        except Exception as e:
+            logger.error(f"Notion proactive check failed: {e}")
+            result = {"type": "notion_proactive_check", "error": str(e)}
+
+        # Always reschedule next check (even on error)
+        try:
+            next_check = datetime.utcnow() + timedelta(hours=RESCHEDULE_HOURS)
+            await TaskRepository.enqueue(
+                user_id=user_id,
+                task_type="notion_proactive_check",
+                payload={},
+                scheduled_at=next_check,
+                priority=8,
+            )
+            logger.info(f"Notion proactive check rescheduled for {next_check.isoformat()}")
+        except Exception as e:
+            logger.error(f"Failed to reschedule notion proactive check: {e}")
+
+        return result
 
     async def _handle_unknown(self, user_id: str, payload: dict) -> dict:
         """Handle unknown task types."""

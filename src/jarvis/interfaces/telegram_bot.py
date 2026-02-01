@@ -655,6 +655,35 @@ def create_bot() -> Application:
     return app
 
 
+async def _schedule_notion_proactive_checks():
+    """Schedule initial Notion proactive checks for all authorized users."""
+    from datetime import datetime, timedelta
+
+    allowed = settings.telegram_allowed_users_list
+    if not allowed:
+        return
+
+    for user_id in allowed:
+        user_id_str = str(user_id)
+        try:
+            # Check if a pending/claimed notion_proactive_check already exists
+            existing = await TaskRepository.get_user_tasks(user_id_str, status="pending", limit=50)
+            has_check = any(t.get("task_type") == "notion_proactive_check" for t in existing)
+
+            if not has_check:
+                scheduled_at = datetime.utcnow() + timedelta(minutes=5)
+                await TaskRepository.enqueue(
+                    user_id=user_id_str,
+                    task_type="notion_proactive_check",
+                    payload={},
+                    scheduled_at=scheduled_at,
+                    priority=8,
+                )
+                logger.info(f"Scheduled initial Notion proactive check for user {user_id}")
+        except Exception as e:
+            logger.warning(f"Failed to schedule Notion check for user {user_id}: {e}")
+
+
 async def run_bot():
     """Run the Telegram bot."""
     # Create and run bot
@@ -664,6 +693,9 @@ async def run_bot():
     await app.initialize()
     await app.start()
     await app.updater.start_polling(drop_pending_updates=True)
+
+    # Schedule proactive checks
+    await _schedule_notion_proactive_checks()
 
     # Keep running
     try:
