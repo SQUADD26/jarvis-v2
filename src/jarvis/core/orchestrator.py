@@ -92,10 +92,11 @@ REGOLE FONDAMENTALI:
    - MAI elencare 20+ task una per una - è illeggibile
    - MAI chiedere "ti sembra adeguata?" o simili domande di cortesia
 
-FORMATTAZIONE (OBBLIGATORIA - USA SOLO HTML):
+FORMATTAZIONE (OBBLIGATORIA - USA SOLO QUESTI TAG HTML):
 - <b>grassetto</b> per enfasi importante
 - <i>corsivo</i> per dettagli secondari
-- Per elenchi puntati usa: - oppure numeri (1. 2. 3.)
+- Per elenchi usa: "- " oppure "1. 2. 3." come testo semplice
+- MAI usare: <ol>, <ul>, <li>, <h1>, <h2>, <p>, <div>, <span> o qualsiasi altro tag HTML
 - MAI usare Markdown: NO **, NO *, NO ##, NO __, NO ```
 - Scrivi naturale, non schematico
 

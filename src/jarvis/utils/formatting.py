@@ -17,7 +17,14 @@ def format_for_telegram(text: str) -> str:
     if not text:
         return text or ""
 
-    # Step 1: Protect existing valid Telegram HTML tags with placeholders
+    # Step 1: Strip unsupported HTML tags BEFORE anything else
+    # Convert <li> items to "- " bullet points
+    text = re.sub(r"<li[^>]*>\s*", "- ", text, flags=re.IGNORECASE)
+    text = re.sub(r"</li>", "", text, flags=re.IGNORECASE)
+    # Remove <ol>, </ol>, <ul>, </ul>, <p>, </p>, <div>, </div>, <span>, </span>, <br>, <h1-6>
+    text = re.sub(r"</?(?:ol|ul|p|div|span|h[1-6]|br/?)[^>]*>", "", text, flags=re.IGNORECASE)
+
+    # Step 2: Protect existing valid Telegram HTML tags with placeholders
     protected_segments: list[tuple[str, str]] = []
     placeholder_counter = 0
 
@@ -32,7 +39,7 @@ def format_for_telegram(text: str) -> str:
     telegram_tags = r"</?(?:b|i|u|s|code|pre|a|tg-spoiler|blockquote)(?:\s[^>]*)?>"
     text = re.sub(telegram_tags, protect, text, flags=re.IGNORECASE)
 
-    # Step 2: Protect code blocks (``` ... ```)
+    # Step 3: Protect code blocks (``` ... ```)
     def protect_code_block(match: re.Match) -> str:
         nonlocal placeholder_counter
         lang = match.group(1) or ""
@@ -50,7 +57,7 @@ def format_for_telegram(text: str) -> str:
 
     text = re.sub(r"```(\w+)?\n?(.*?)```", protect_code_block, text, flags=re.DOTALL)
 
-    # Step 3: Protect inline code (` ... `)
+    # Step 4: Protect inline code (` ... `)
     def protect_inline_code(match: re.Match) -> str:
         nonlocal placeholder_counter
         code = match.group(1)
@@ -63,12 +70,12 @@ def format_for_telegram(text: str) -> str:
 
     text = re.sub(r"`([^`]+)`", protect_inline_code, text)
 
-    # Step 4: Escape HTML entities in remaining text
+    # Step 5: Escape HTML entities in remaining text
     text = text.replace("&", "&amp;")
     text = text.replace("<", "&lt;")
     text = text.replace(">", "&gt;")
 
-    # Step 5: Convert Markdown to HTML
+    # Step 6: Convert Markdown to HTML
 
     # Headers: ## Text -> <b>Text</b>
     text = re.sub(r"^#{1,6}\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
@@ -85,8 +92,11 @@ def format_for_telegram(text: str) -> str:
     # Bullet points: lines starting with - or * followed by space
     text = re.sub(r"^[\-\*]\s+", "- ", text, flags=re.MULTILINE)
 
-    # Step 6: Restore protected segments (in reverse order to handle nesting)
+    # Step 7: Restore protected segments (in reverse order to handle nesting)
     for placeholder, original in reversed(protected_segments):
         text = text.replace(placeholder, original)
+
+    # Clean up excessive blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
 
     return text.strip()

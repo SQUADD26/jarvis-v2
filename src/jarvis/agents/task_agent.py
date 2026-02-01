@@ -358,6 +358,66 @@ class TaskAgent(BaseAgent):
             summaries.append(summary)
         return summaries
 
+    def _build_text_digest(self, summaries: list[dict], db_title: str = "") -> str:
+        """Build a pre-formatted text digest of tasks for the LLM.
+
+        Instead of dumping raw JSON, produce a structured summary that
+        the orchestrator LLM can relay almost verbatim.
+        """
+        if not summaries:
+            return "Nessuna task trovata."
+
+        total = len(summaries)
+
+        # Group by status
+        by_status: dict[str, list[dict]] = {}
+        for s in summaries:
+            status = s.get("status") or "Senza stato"
+            by_status.setdefault(status, []).append(s)
+
+        # Group by priority
+        by_priority: dict[str, int] = {}
+        for s in summaries:
+            prio = s.get("priority") or "Senza priorita"
+            by_priority[prio] = by_priority.get(prio, 0) + 1
+
+        lines = []
+        if db_title:
+            lines.append(f"Database: {db_title}")
+        lines.append(f"Totale: {total} task attive")
+        lines.append("")
+
+        # Status breakdown
+        lines.append("Per stato:")
+        for status, tasks in by_status.items():
+            lines.append(f"  - {status}: {len(tasks)}")
+
+        # Priority breakdown if available
+        if any(s.get("priority") for s in summaries):
+            lines.append("")
+            lines.append("Per priorita:")
+            for prio, count in sorted(by_priority.items()):
+                lines.append(f"  - {prio}: {count}")
+
+        # List ALL tasks grouped by status
+        lines.append("")
+        for status, tasks in by_status.items():
+            lines.append(f"\n--- {status} ({len(tasks)}) ---")
+            for t in tasks:
+                parts = [t.get("title", "?")]
+                if t.get("due"):
+                    parts.append(f"scad: {t['due']}")
+                if t.get("assignee"):
+                    assignee = t["assignee"]
+                    if isinstance(assignee, list):
+                        assignee = ", ".join(str(a) for a in assignee)
+                    parts.append(f"→ {assignee}")
+                if t.get("priority"):
+                    parts.append(f"[{t['priority']}]")
+                lines.append(f"  - {' | '.join(parts)}")
+
+        return "\n".join(lines)
+
     async def _tool_list_databases(self) -> dict:
         """List available Notion databases."""
         try:
@@ -478,9 +538,19 @@ class TaskAgent(BaseAgent):
                         ]
 
             summaries = self._summarize_tasks(tasks, schema)
+
+            # Find database title for the digest
+            db_title = ""
+            all_databases = await notion_client.discover_databases()
+            for db in all_databases:
+                if db["id"] == db_id:
+                    db_title = db.get("title", "")
+                    break
+
+            digest = self._build_text_digest(summaries, db_title)
             return {
                 "operation": "query_tasks",
-                "tasks": summaries,
+                "digest": digest,
                 "count": len(summaries),
             }
         except Exception as e:
