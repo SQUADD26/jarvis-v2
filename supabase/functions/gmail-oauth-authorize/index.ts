@@ -10,7 +10,7 @@ serve(async (req) => {
   try {
     const user = await verifyUser(req);
 
-    const clientId = Deno.env.get("GOOGLE_CLIENT_ID")!;
+    const clientId = Deno.env.get("GMAIL_CLIENT_ID")!;
     const redirectUri = `${Deno.env.get("SUPABASE_URL")}/functions/v1/gmail-oauth-callback`;
 
     const scopes = [
