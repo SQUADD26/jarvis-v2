@@ -38,6 +38,11 @@ def get_db() -> Client:
     return supabase_client.client
 
 
+def get_supabase_client() -> Client:
+    """Alias for get_db(), used by API auth middleware."""
+    return supabase_client.client
+
+
 async def run_db(fn):
     """Run a synchronous Supabase call in a thread to avoid blocking the event loop."""
     import asyncio

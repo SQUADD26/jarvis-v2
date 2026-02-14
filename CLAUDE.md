@@ -249,3 +249,58 @@ GOOGLE_REFRESH_TOKEN=
 - Italian language throughout UI and system prompts
 - Conversation history uses LRU cache with bounded memory (100 users, 20 messages each)
 - All LLM calls are logged to `llm_logs` table with cost tracking
+
+# Supabase & Database — REGOLE GLOBALI INVIOLABILI
+
+## CLI-FIRST, MCP-FALLBACK (IRON RULE)
+
+**Il Supabase CLI (`supabase` via Bash) è lo strumento PRIMARIO. L'MCP Server (`mcp__supabase__*`) è SOLO il fallback per operazioni di lettura.**
+
+### Operazioni OBBLIGATORIE via CLI (MAI via MCP)
+- `supabase migration new <name>` — creare migration locali
+- `supabase db push` — pushare migration al remote
+- `supabase functions deploy <name> --no-verify-jwt` — deploy Edge Functions
+- `supabase db diff` — verificare drift di schema
+- `supabase db pull` — pull schema remoto
+- `supabase db reset` — reset database locale
+- `supabase gen types typescript` — generazione tipi
+- `supabase link` — collegamento progetto
+
+### MCP Server — SOLO LETTURA/ISPEZIONE
+L'MCP Server è accettabile SOLO per:
+- `execute_sql` — query SELECT, EXPLAIN ANALYZE
+- `list_tables`, `list_extensions`, `list_migrations` — ispezione schema
+- `get_project`, `get_project_url` — metadata progetto
+
+### DIVIETI ASSOLUTI
+- **MAI** usare `mcp__supabase__apply_migration` — causa schema drift tra locale e remoto
+- **MAI** usare `mcp__supabase__deploy_edge_function` — usa sempre il CLI
+- **MAI** applicare migration al remote senza file locale corrispondente in `supabase/migrations/`
+- **MAI** deployare Edge Functions senza `--no-verify-jwt`
+
+## Edge Functions — `--no-verify-jwt` SEMPRE
+
+**OGNI deploy di Edge Function DEVE usare: `supabase functions deploy <name> --no-verify-jwt`**
+- Omettere `--no-verify-jwt` è un ERRORE CRITICO — ri-deployare immediatamente col flag
+- Nessuna eccezione. Nessun "lo aggiungo dopo".
+
+## Migration Workflow — OBBLIGATORIO
+
+1. Progettare la migration SQL
+2. `supabase migration new <nome_descrittivo>` — crea file locale
+3. Scrivere SQL nel file generato in `supabase/migrations/`
+4. `supabase db push` — push al remote
+5. Verificare via MCP `execute_sql` (solo SELECT)
+6. `supabase db diff` — confermare zero drift
+
+**`supabase/migrations/` è la SINGLE SOURCE OF TRUTH. Se non c'è il file locale, la migration non esiste.**
+
+## Delegazione Agenti — OBBLIGATORIA
+
+### Animazioni (QUALSIASI animazione, transizione, motion)
+- Invocare **`ux-master`** per strategia di interazione e animazione
+- Invocare **`micro-animation-master`** per animazioni a livello di elemento (hover, focus, button press, form validation, toggle, tooltip)
+- Invocare **`macro-animation-master`** per transizioni di pagina, scroll-driven, sequenze orchestrate, drag & drop
+
+### UI (QUALSIASI aspetto visivo/interfaccia)
+- Invocare **`ui-master`** per gerarchia visiva, accessibilità, layout, design system

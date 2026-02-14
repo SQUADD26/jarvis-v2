@@ -154,6 +154,61 @@ class GeminiClient:
             await llm_logger.log(log_entry)
             raise
 
+    async def generate_stream(
+        self,
+        prompt: str,
+        system_instruction: str = None,
+        model: str = None,
+        temperature: float = 0.7,
+        max_tokens: int = 4096,
+        user_id: str = None
+    ):
+        """Generate text response as an async stream of chunks."""
+        model_to_use = model or self.default_model
+        effective_user_id = user_id or self._current_user_id
+
+        log_entry = LLMLogEntry(
+            provider="gemini",
+            model=model_to_use,
+            user_prompt=prompt,
+            system_prompt=system_instruction,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            user_id=effective_user_id,
+        )
+        log_entry.start_timer()
+
+        config = types.GenerateContentConfig(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        )
+
+        if system_instruction:
+            config.system_instruction = system_instruction
+
+        full_response = []
+        try:
+            async for chunk in self.client.aio.models.generate_content_stream(
+                model=model_to_use,
+                contents=prompt,
+                config=config
+            ):
+                if chunk.text:
+                    full_response.append(chunk.text)
+                    yield chunk.text
+
+            log_entry.stop_timer()
+            log_entry.response = "".join(full_response)
+            log_entry.finish_reason = "stop"
+            await llm_logger.log(log_entry)
+
+        except Exception as e:
+            log_entry.stop_timer()
+            log_entry.is_error = True
+            log_entry.error_message = str(e)
+            await llm_logger.log(log_entry)
+            raise
+
     async def embed(self, text: str) -> list[float]:
         """Generate embedding for text."""
         try:
