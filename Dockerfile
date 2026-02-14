@@ -10,7 +10,7 @@ COPY pyproject.toml .
 COPY uv.lock* .
 
 # Install dependencies
-RUN uv sync --frozen --no-dev
+RUN uv sync --no-dev
 
 # Copy source code
 COPY src/ src/
