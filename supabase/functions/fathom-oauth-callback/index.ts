@@ -21,7 +21,7 @@ serve(async (req) => {
     const redirectUri = `${Deno.env.get("SUPABASE_URL")}/functions/v1/fathom-oauth-callback`;
 
     // Exchange code for tokens
-    const tokenRes = await fetch("https://fathom.video/oauth/token", {
+    const tokenRes = await fetch("https://fathom.video/external/v1/oauth2/token", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({

@@ -17,10 +17,11 @@ serve(async (req) => {
       client_id: clientId,
       redirect_uri: redirectUri,
       response_type: "code",
+      scope: "public_api",
       state: user.id,
     });
 
-    const url = `https://fathom.video/oauth/authorize?${params}`;
+    const url = `https://fathom.video/external/v1/oauth2/authorize?${params}`;
 
     return new Response(JSON.stringify({ url }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
