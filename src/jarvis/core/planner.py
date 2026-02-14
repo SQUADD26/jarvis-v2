@@ -17,52 +17,42 @@ AGENT_CAPABILITIES = {
 }
 
 PLANNER_PROMPT = """Sei un planner che decide quali agenti attivare per rispondere alla richiesta dell'utente.
+Puoi pianificare AZIONI SEQUENZIALI quando servono piu passaggi.
 
 AGENTI DISPONIBILI:
 {agent_descriptions}
 
 REGOLE:
 1. Analizza cosa l'utente sta chiedendo, CONSIDERANDO IL CONTESTO della conversazione recente
-2. Seleziona SOLO gli agenti necessari (può essere 0, 1, o più)
-3. Se la richiesta è semplice conversazione (saluti, ringraziamenti, domande generiche su di te), non servono agenti
-4. Se l'utente chiede qualcosa che richiede dati esterni (calendario, email, web), seleziona gli agenti appropriati
-5. In caso di dubbio su calendario/email, è meglio includere l'agente che escluderlo
-6. Se l'utente fa riferimento a qualcosa detto prima (es. "riprova", "fallo di nuovo", "continua"), USA IL CONTESTO per capire cosa intende
+2. Seleziona SOLO gli agenti necessari
+3. Se la richiesta e semplice conversazione (saluti, ringraziamenti), restituisci steps vuoto
+4. Se serve UN SOLO passaggio (caso comune), restituisci UN singolo step
+5. Se servono AZIONI SEQUENZIALI (output di un agente serve come input per un altro), usa PIU step
+6. MASSIMO 3 step per richiesta
+7. Se l'utente fa riferimento a qualcosa detto prima, USA IL CONTESTO
 
-⚠️ REGOLA CRITICA - VERIFICA/CONTROLLA:
-Quando l'utente chiede di VERIFICARE, CONTROLLARE, CONFERMARE qualcosa (calendario, email, ecc.),
+REGOLA CRITICA - VERIFICA/CONTROLLA:
+Quando l'utente chiede di VERIFICARE, CONTROLLARE, CONFERMARE qualcosa,
 DEVI SEMPRE attivare l'agente corrispondente per recuperare i dati REALI.
-NON fidarti mai della conversazione precedente - l'utente vuole dati FRESCHI.
+
+QUANDO USARE MULTI-STEP:
+- "cerca l'email di Marco e crea un evento" -> step1: email (cerca), step2: calendar (crea con dati email)
+- "controlla il calendario e manda un riassunto via email" -> step1: calendar, step2: email
+- "cerca info su X nel web e salvale nella knowledge base" -> step1: web, step2: rag
+
+QUANDO NON USARE MULTI-STEP (un singolo step basta):
+- "cosa ho domani" -> step1: calendar
+- "controlla email e calendario" -> step1: calendar + email (paralleli nello stesso step)
+- "ciao come stai" -> steps: []
 
 ESEMPI:
-- "ciao come stai" → agents: []
-- "cosa ho domani" → agents: ["calendar"]
-- "mi passi l'agenda di lunedì" → agents: ["calendar"]
-- "controlla l'agenda" → agents: ["calendar"]
-- "verifica il calendario" → agents: ["calendar"]
-- "è corretto?" (dopo aver parlato di calendario) → agents: ["calendar"]
-- "controlla se è giusto" → agents: ["calendar"] (o l'agente del contesto)
-- "crea una bozza email" → agents: ["email"]
-- "controlla email e calendario" → agents: ["calendar", "email"]
-- "che tempo fa a Milano" → agents: ["web"]
-- "cerca nei miei documenti" → agents: ["rag"]
-- "grazie mille" → agents: []
-- "riprova" (dopo richiesta di ingestione URL) → agents: ["rag"]
-- "fallo" (dopo richiesta di creare evento) → agents: ["calendar"]
-- "chi e Marco Rossi?" → agents: ["kg"]
-- "chi sono i miei colleghi?" → agents: ["kg"]
-- "dimmi di piu su Acme" → agents: ["kg"]
-- "per chi lavora Giovanni?" → agents: ["kg"]
-- "quali persone conosco?" → agents: ["kg"]
-- "chi e il mio capo?" → agents: ["kg"]
-- "mostra le mie task" → agents: ["task"]
-- "che task ho in scadenza?" → agents: ["task"]
-- "crea task comprare latte" → agents: ["task"]
-- "completa la task report" → agents: ["task"]
-- "segna come fatta la task X" → agents: ["task"]
+- "ciao" -> {{"steps": [], "reasoning": "conversazione"}}
+- "cosa ho domani" -> {{"steps": [{{"agents": ["calendar"], "goal": "recupera eventi di domani"}}], "reasoning": "query calendario"}}
+- "controlla email e calendario" -> {{"steps": [{{"agents": ["calendar", "email"], "goal": "recupera eventi e email"}}], "reasoning": "query parallela"}}
+- "cerca l'email di Marco e crea un evento basato su quella" -> {{"steps": [{{"agents": ["email"], "goal": "cerca email da Marco"}}, {{"agents": ["calendar"], "goal": "crea evento basato sui dati dell'email trovata"}}], "reasoning": "azione sequenziale: prima email poi calendario"}}
 
 Rispondi SOLO con un JSON valido:
-{{"agents": ["agent1", "agent2"], "reasoning": "breve spiegazione"}}
+{{"steps": [{{"agents": ["agent1"], "goal": "descrizione obiettivo step"}}], "reasoning": "breve spiegazione"}}
 
 {conversation_context}
 RICHIESTA UTENTE ATTUALE:
@@ -77,27 +67,20 @@ class Planner:
     def __init__(self):
         self.model = "gemini-2.5-flash"
 
-    async def plan(self, user_input: str, user_id: str = None, history: list = None) -> list[str]:
+    async def plan(self, user_input: str, user_id: str = None, history: list = None) -> tuple[list[str], list[dict]]:
         """
         Analyze user input and determine which agents are needed.
 
-        Args:
-            user_input: The user's message
-            user_id: User ID for logging
-            history: Conversation history (list of HumanMessage/AIMessage)
-
         Returns:
-            List of agent names to execute
+            Tuple of (flat agent list for backward compat, list of step dicts)
         """
-        # Build agent descriptions
         agent_descriptions = "\n".join([
             f"- {name}: {desc}" for name, desc in AGENT_CAPABILITIES.items()
         ])
 
-        # Format conversation context (last 4 messages for context)
         conversation_context = ""
         if history and len(history) > 0:
-            recent = history[-4:]  # Last 2 exchanges
+            recent = history[-4:]
             context_lines = ["CONTESTO CONVERSAZIONE RECENTE:"]
             for msg in recent:
                 role = "Utente" if msg.__class__.__name__ == "HumanMessage" else "Assistente"
@@ -112,17 +95,15 @@ class Planner:
         )
 
         try:
-            # Set user context for logging
             if user_id:
                 gemini.set_user_context(user_id)
 
             response = await gemini.generate(
                 prompt,
                 model=self.model,
-                temperature=0.1  # Low temperature for consistent decisions
+                temperature=0.1
             )
 
-            # Parse JSON response
             clean_response = response.strip()
             if clean_response.startswith("```"):
                 clean_response = clean_response.split("```")[1]
@@ -131,24 +112,35 @@ class Planner:
                 clean_response = clean_response.strip()
 
             result = json.loads(clean_response)
-            agents = result.get("agents", [])
+            steps = result.get("steps", [])
             reasoning = result.get("reasoning", "")
 
-            # Validate agents
-            valid_agents = [a for a in agents if a in AGENT_CAPABILITIES]
+            # Validate steps
+            valid_steps = []
+            all_agents = []
+            for step in steps[:3]:  # Max 3 steps
+                agents = [a for a in step.get("agents", []) if a in AGENT_CAPABILITIES]
+                if agents:
+                    valid_steps.append({
+                        "agents": agents,
+                        "goal": step.get("goal", "")
+                    })
+                    all_agents.extend(agents)
 
-            logger.info(f"Planner decision: {valid_agents} - {reasoning}")
-            return valid_agents
+            unique_agents = list(dict.fromkeys(all_agents))
+
+            logger.info(f"Planner decision: {len(valid_steps)} steps, agents={unique_agents} - {reasoning}")
+            return unique_agents, valid_steps
 
         except json.JSONDecodeError as e:
             logger.warning(f"Planner JSON parse error: {e}, response: {response[:200]}")
-            # Fallback: try to extract agent names from response
-            return self._fallback_extraction(response)
+            agents = self._fallback_extraction(response)
+            steps = [{"agents": agents, "goal": ""}] if agents else []
+            return agents, steps
 
         except Exception as e:
             logger.error(f"Planner error: {e}")
-            # On error, return empty (will use direct LLM response)
-            return []
+            return [], []
 
     def _fallback_extraction(self, response: str) -> list[str]:
         """Fallback agent extraction when JSON parsing fails."""

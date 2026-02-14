@@ -2,9 +2,11 @@
 
 import asyncio
 from typing import Any
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from jarvis.config import get_settings
+from jarvis.db.supabase_client import run_db
 from jarvis.db.repositories import TaskRepository
 from jarvis.worker.notifier import notifier
 from jarvis.core.orchestrator import process_message
@@ -20,7 +22,10 @@ class TaskExecutor:
 
     async def execute(self, task: dict) -> dict:
         """Execute a task and return the result."""
-        task_id = task["id"]
+        task_id = task.get("id")
+        if not task_id:
+            logger.error(f"Task has no id, skipping: {task}")
+            return {"success": False, "error": "Task has no id"}
         task_type = task["task_type"]
         user_id = task["user_id"]
         payload = task.get("payload", {})
@@ -59,6 +64,8 @@ class TaskExecutor:
             "rag_ingest": self._handle_rag_ingest,
             "rag_deep_crawl": self._handle_rag_deep_crawl,
             "notion_proactive_check": self._handle_notion_proactive_check,
+            "daily_briefing": self._handle_daily_briefing,
+            "email_monitor": self._handle_email_monitor,
         }
         return handlers.get(task_type, self._handle_unknown)
 
@@ -217,7 +224,7 @@ class TaskExecutor:
 
         # Create ONE source for the entire documentation
         try:
-            source_result = db.table("rag_sources").insert({
+            source_result = await run_db(lambda: db.table("rag_sources").insert({
                 "user_id": user_id,
                 "title": collection_title,
                 "source_type": "url",
@@ -230,7 +237,7 @@ class TaskExecutor:
                     "max_depth": max_depth
                 },
                 "status": "processing"
-            }).execute()
+            }).execute())
 
             if not source_result.data:
                 raise Exception("Failed to create source")
@@ -292,7 +299,7 @@ class TaskExecutor:
 
                 # Batch insert chunks
                 try:
-                    result = db.table("rag_chunks").insert(records).execute()
+                    result = await run_db(lambda: db.table("rag_chunks").insert(records).execute())
                     total_chunks += len(result.data) if result.data else 0
                 except Exception as e:
                     logger.error(f"Failed to store chunks for {page_url}: {e}")
@@ -306,7 +313,7 @@ class TaskExecutor:
         # Cleanup on failure - delete source (CASCADE deletes chunks)
         if ingestion_failed or total_chunks == 0:
             try:
-                db.table("rag_sources").delete().eq("id", source_id).execute()
+                await run_db(lambda: db.table("rag_sources").delete().eq("id", source_id).execute())
                 logger.info(f"Cleaned up failed source {source_id}")
             except Exception as cleanup_error:
                 logger.error(f"Failed to cleanup source: {cleanup_error}")
@@ -321,10 +328,10 @@ class TaskExecutor:
 
         # Update source with final status and chunk count
         try:
-            db.table("rag_sources").update({
+            await run_db(lambda: db.table("rag_sources").update({
                 "status": "active",
                 "chunks_count": total_chunks
-            }).eq("id", source_id).execute()
+            }).eq("id", source_id).execute())
         except Exception as e:
             logger.error(f"Failed to update source status: {e}")
 
@@ -494,6 +501,398 @@ Scrivi un messaggio breve in italiano, usa emoji per rendere il tutto leggibile.
             logger.error(f"Failed to reschedule notion proactive check: {e}")
 
         return result
+
+    async def _handle_daily_briefing(self, user_id: str, payload: dict) -> dict:
+        """Handle daily briefing - morning or evening digest."""
+        from jarvis.integrations.google_calendar import GoogleCalendarClient
+        from jarvis.integrations.gmail import GmailClient
+        from jarvis.integrations.notion import notion_client
+        from jarvis.integrations.gemini import gemini
+
+        briefing_type = payload.get("briefing_type", "morning")  # "morning" or "evening"
+        
+        try:
+            # Setup timezone
+            tz = ZoneInfo(settings.briefing_timezone)
+            now_local = datetime.now(tz)
+            today_start = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+            today_end = today_start + timedelta(days=1)
+            tomorrow_start = today_end
+            tomorrow_end = tomorrow_start + timedelta(days=1)
+
+            briefing_parts = []
+
+            # === CALENDAR EVENTS ===
+            try:
+                calendar_client = GoogleCalendarClient()
+                if briefing_type == "morning":
+                    # Morning: today's events
+                    events = calendar_client.get_events(
+                        start=today_start,
+                        end=today_end,
+                        max_results=20
+                    )
+                    if events:
+                        briefing_parts.append(f"EVENTI DI OGGI ({len(events)}):")
+                        for evt in events:
+                            evt_time = evt.get("start", {}).get("dateTime") or evt.get("start", {}).get("date", "")
+                            briefing_parts.append(f"- {evt.get('summary', 'Senza titolo')} ({evt_time})")
+                    else:
+                        briefing_parts.append("EVENTI DI OGGI: Nessun evento in agenda.")
+                else:
+                    # Evening: tomorrow's events preview
+                    events = calendar_client.get_events(
+                        start=tomorrow_start,
+                        end=tomorrow_end,
+                        max_results=20
+                    )
+                    if events:
+                        briefing_parts.append(f"EVENTI DI DOMANI ({len(events)}):")
+                        for evt in events:
+                            evt_time = evt.get("start", {}).get("dateTime") or evt.get("start", {}).get("date", "")
+                            briefing_parts.append(f"- {evt.get('summary', 'Senza titolo')} ({evt_time})")
+                    else:
+                        briefing_parts.append("EVENTI DI DOMANI: Nessun evento in agenda.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch calendar events for briefing: {e}")
+                briefing_parts.append("CALENDARIO: Non disponibile.")
+
+            # === EMAIL ===
+            try:
+                gmail_client = GmailClient()
+                if briefing_type == "morning":
+                    # Morning: unread emails
+                    emails = gmail_client.get_inbox(max_results=10, unread_only=True)
+                    if emails:
+                        briefing_parts.append(f"\nEMAIL NON LETTE ({len(emails)}):")
+                        for email in emails:
+                            briefing_parts.append(f"- Da: {email.get('from', 'Sconosciuto')}, Oggetto: {email.get('subject', 'Nessun oggetto')}")
+                    else:
+                        briefing_parts.append("\nEMAIL NON LETTE: Nessuna.")
+                else:
+                    # Evening: today's emails
+                    today_str = today_start.strftime("%Y/%m/%d")
+                    emails = gmail_client.get_inbox(max_results=10, query=f"after:{today_str}")
+                    if emails:
+                        briefing_parts.append(f"\nEMAIL DI OGGI ({len(emails)}):")
+                        for email in emails:
+                            briefing_parts.append(f"- Da: {email.get('from', 'Sconosciuto')}, Oggetto: {email.get('subject', 'Nessun oggetto')}")
+                    else:
+                        briefing_parts.append("\nEMAIL DI OGGI: Nessuna.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch emails for briefing: {e}")
+                briefing_parts.append("\nEMAIL: Non disponibili.")
+
+            # === NOTION TASKS ===
+            try:
+                databases = await notion_client.discover_databases()
+                if databases:
+                    today_str = today_start.strftime("%Y-%m-%d")
+                    tasks_today = []
+                    tasks_overdue = []
+
+                    for db in databases:
+                        try:
+                            schema = await notion_client.get_database_schema(db["id"])
+                            props = schema.get("properties", {})
+
+                            # Find date and title properties
+                            date_prop_name = None
+                            title_prop_name = None
+                            for name, info in props.items():
+                                if info["type"] == "date":
+                                    date_prop_name = name
+                                if info["type"] == "title":
+                                    title_prop_name = name
+
+                            if not date_prop_name:
+                                continue
+
+                            # Query tasks due today or overdue
+                            filter_obj = {
+                                "and": [
+                                    {"property": date_prop_name, "date": {"on_or_before": today_str}},
+                                    {"property": date_prop_name, "date": {"is_not_empty": True}},
+                                ]
+                            }
+
+                            # Exclude completed tasks
+                            for name, info in props.items():
+                                if info["type"] == "status":
+                                    done_options = [
+                                        o for o in info.get("options", [])
+                                        if o.lower() in ("done", "completato", "completata", "fatto", "fatta", "completed", "chiuso", "chiusa")
+                                    ]
+                                    for done_opt in done_options:
+                                        filter_obj["and"].append({
+                                            "property": name,
+                                            "status": {"does_not_equal": done_opt},
+                                        })
+                                    break
+
+                            tasks = await notion_client.query_database(db["id"], filter_obj)
+
+                            for task in tasks:
+                                date_val = task.get(date_prop_name)
+                                if not date_val:
+                                    continue
+                                due_str = date_val.get("start") if isinstance(date_val, dict) else str(date_val)
+                                if not due_str:
+                                    continue
+                                task_title = task.get(title_prop_name, "Senza titolo") if title_prop_name else "Senza titolo"
+                                
+                                if due_str == today_str:
+                                    tasks_today.append(f"- {task_title} (da: {db['title']})")
+                                elif due_str < today_str:
+                                    tasks_overdue.append(f"- {task_title} (scadenza: {due_str}, da: {db['title']})")
+
+                        except Exception as e:
+                            logger.warning(f"Failed to query Notion database {db['title']} for briefing: {e}")
+
+                    if tasks_overdue:
+                        briefing_parts.append(f"\nTASK NOTION SCADUTE ({len(tasks_overdue)}):")
+                        briefing_parts.extend(tasks_overdue)
+                    
+                    if tasks_today:
+                        briefing_parts.append(f"\nTASK NOTION DI OGGI ({len(tasks_today)}):")
+                        briefing_parts.extend(tasks_today)
+                    
+                    if not tasks_overdue and not tasks_today:
+                        briefing_parts.append("\nTASK NOTION: Nessuna task in scadenza oggi.")
+                else:
+                    briefing_parts.append("\nTASK NOTION: Nessun database configurato.")
+            except Exception as e:
+                logger.warning(f"Failed to fetch Notion tasks for briefing: {e}")
+                briefing_parts.append("\nTASK NOTION: Non disponibili.")
+
+            # === GENERATE LLM DIGEST ===
+            raw_data = "\n".join(briefing_parts)
+            gemini.set_user_context(user_id)
+            
+            digest_prompt = f"""Genera un briefing {briefing_type} per l'utente. Sii conciso, utile e usa emoji per rendere il tutto più leggibile.
+
+DATI:
+{raw_data}
+
+Scrivi un messaggio breve in italiano, ben formattato. Non usare markdown. Usa emoji appropriate per sezioni (📅 calendario, 📧 email, 📋 task)."""
+
+            digest = await gemini.generate(
+                digest_prompt,
+                model="gemini-2.5-flash",
+                temperature=0.4,
+            )
+
+            # === NOTIFY USER ===
+            title = f"☀️ Briefing mattutino" if briefing_type == "morning" else f"🌙 Briefing serale"
+            await notifier.notify_task_completed(user_id, title, digest)
+
+            # === SCHEDULE NEXT BRIEFING ===
+            await self._schedule_next_briefing(user_id, briefing_type)
+
+            return {
+                "type": "daily_briefing",
+                "briefing_type": briefing_type,
+                "status": "completed",
+            }
+
+        except Exception as e:
+            logger.error(f"Daily briefing failed: {e}")
+            # Still try to schedule next briefing even on error
+            try:
+                await self._schedule_next_briefing(user_id, briefing_type)
+            except Exception as schedule_error:
+                logger.error(f"Failed to reschedule briefing after error: {schedule_error}")
+            
+            return {
+                "type": "daily_briefing",
+                "briefing_type": briefing_type,
+                "error": str(e),
+            }
+
+    async def _schedule_next_briefing(self, user_id: str, current_briefing_type: str):
+        """Schedule the next briefing (morning -> evening -> morning)."""
+        tz = ZoneInfo(settings.briefing_timezone)
+        now_local = datetime.now(tz)
+
+        if current_briefing_type == "morning":
+            # After morning -> schedule evening for today
+            next_type = "evening"
+            next_local = now_local.replace(
+                hour=settings.briefing_evening_hour,
+                minute=settings.briefing_evening_minute,
+                second=0,
+                microsecond=0
+            )
+            # If evening time already passed today, schedule for tomorrow
+            if next_local <= now_local:
+                next_local += timedelta(days=1)
+        else:
+            # After evening -> schedule morning for tomorrow
+            next_type = "morning"
+            next_local = now_local.replace(
+                hour=settings.briefing_morning_hour,
+                minute=settings.briefing_morning_minute,
+                second=0,
+                microsecond=0
+            ) + timedelta(days=1)
+
+        # Convert to UTC for storage
+        next_utc = next_local.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+        await TaskRepository.enqueue(
+            user_id=user_id,
+            task_type="daily_briefing",
+            payload={"briefing_type": next_type},
+            scheduled_at=next_utc,
+            priority=9,
+        )
+
+        logger.info(f"Next {next_type} briefing scheduled for {next_local.isoformat()} (UTC: {next_utc.isoformat()})")
+
+    async def _handle_email_monitor(self, user_id: str, payload: dict) -> dict:
+        """Handle periodic email monitoring with smart filtering."""
+        from jarvis.integrations.gmail import GmailClient
+        from jarvis.integrations.gemini import gemini
+        from jarvis.core.knowledge_graph import knowledge_graph
+        from jarvis.db.redis_client import redis_client
+        import re
+
+        RESCHEDULE_MINUTES = 15
+        URGENCY_KEYWORDS = [
+            "urgente", "urgent", "asap", "scadenza", "deadline",
+            "importante", "critical", "critico", "immediato", "subito",
+        ]
+
+        logger.info(f"Email monitor check for user {user_id}")
+
+        redis_key = f"email_monitor:last_check:{user_id}"
+        last_check = await redis_client.get(redis_key)
+        last_check_ts = last_check if last_check else None
+
+        try:
+            gmail = GmailClient()
+
+            query = "is:unread"
+            if last_check_ts:
+                query += f" after:{int(last_check_ts)}"
+
+            emails = gmail.get_inbox(
+                max_results=20,
+                query=query,
+                fetch_full_details=False
+            )
+
+            if not emails:
+                await redis_client.set(
+                    redis_key,
+                    int(datetime.utcnow().timestamp()),
+                    ttl=86400 * 7
+                )
+                await self._reschedule_email_monitor(user_id, RESCHEDULE_MINUTES)
+                return {"type": "email_monitor", "new_emails": 0, "notified": False}
+
+            important_emails = []
+
+            for email in emails:
+                sender = email.get("from", "")
+                subject = email.get("subject", "")
+                snippet = email.get("snippet", "")
+                is_important = False
+                reason = ""
+
+                sender_name = re.sub(r"<.*?>", "", sender).strip()
+
+                try:
+                    entities = await knowledge_graph.search_entities(
+                        sender_name[:50], limit=1, threshold=0.8
+                    )
+                    if entities:
+                        is_important = True
+                        reason = f"Contatto noto: {entities[0].get('name', sender_name)}"
+                except Exception:
+                    pass
+
+                if not is_important:
+                    text_to_check = f"{subject} {snippet}".lower()
+                    for kw in URGENCY_KEYWORDS:
+                        if kw in text_to_check:
+                            is_important = True
+                            reason = f"Keyword: {kw}"
+                            break
+
+                if is_important:
+                    important_emails.append({
+                        "from": sender,
+                        "subject": subject,
+                        "snippet": snippet[:150],
+                        "reason": reason,
+                    })
+
+            await redis_client.set(
+                redis_key,
+                int(datetime.utcnow().timestamp()),
+                ttl=86400 * 7
+            )
+
+            notified = False
+            if important_emails:
+                gemini.set_user_context(user_id)
+
+                email_list = "\n".join([
+                    f"- Da: {e['from']} — Oggetto: {e['subject']} (motivo: {e['reason']})"
+                    for e in important_emails
+                ])
+
+                digest_prompt = f"""Hai ricevuto {len(important_emails)} email importanti.
+Genera una notifica breve e chiara in italiano. Usa <b> per enfasi. Non usare markdown.
+Indica chi scrive, l'oggetto e perche e importante.
+
+EMAIL:
+{email_list}
+
+Notifica:"""
+
+                digest = await gemini.generate(
+                    digest_prompt,
+                    model="gemini-2.5-flash",
+                    temperature=0.3,
+                )
+
+                await notifier.notify_task_completed(
+                    user_id,
+                    f"📧 {len(important_emails)} email importanti",
+                    digest
+                )
+                notified = True
+
+        except Exception as e:
+            logger.error(f"Email monitor failed: {e}")
+            await self._reschedule_email_monitor(user_id, RESCHEDULE_MINUTES)
+            return {"type": "email_monitor", "error": str(e)}
+
+        await self._reschedule_email_monitor(user_id, RESCHEDULE_MINUTES)
+
+        return {
+            "type": "email_monitor",
+            "total_new": len(emails),
+            "important": len(important_emails),
+            "notified": notified,
+        }
+
+    async def _reschedule_email_monitor(self, user_id: str, minutes: int):
+        """Reschedule email monitor."""
+        try:
+            next_check = datetime.utcnow() + timedelta(minutes=minutes)
+            await TaskRepository.enqueue(
+                user_id=user_id,
+                task_type="email_monitor",
+                payload={},
+                scheduled_at=next_check,
+                priority=7,
+            )
+            logger.info(f"Email monitor rescheduled for {next_check.isoformat()}")
+        except Exception as e:
+            logger.error(f"Failed to reschedule email monitor: {e}")
 
     async def _handle_unknown(self, user_id: str, payload: dict) -> dict:
         """Handle unknown task types."""

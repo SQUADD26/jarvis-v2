@@ -263,7 +263,7 @@ class KGExtractor:
 
     def __init__(self):
         self.min_confidence = 0.4  # Soglia minima per salvare
-        self.extraction_model = "gemini-2.0-flash"  # Modello veloce per estrazione
+        self.extraction_model = "gemini-2.5-flash"  # Modello veloce per estrazione
 
     async def process(
         self,

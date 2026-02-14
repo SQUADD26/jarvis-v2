@@ -130,25 +130,28 @@ async def analyze_intent(state: JarvisState) -> JarvisState:
     user_id = state["user_id"]
     messages = state.get("messages", [])
 
-    # Pass conversation history to planner for context (exclude current message)
     history = messages[:-1] if len(messages) > 1 else []
 
-    # Always use planner - reliable and fast (Gemini 2.5 Flash)
-    required_agents = await planner.plan(user_input, user_id, history=history)
+    required_agents, plan_steps = await planner.plan(user_input, user_id, history=history)
 
-    # Determine intent based on agents
     if required_agents:
         intent = "action"
     else:
         intent = "chitchat"
 
-    logger.info(f"Planner: intent={intent}, agents={required_agents}")
+    logger.info(f"Planner: intent={intent}, agents={required_agents}, steps={len(plan_steps)}")
 
     return {
         **state,
         "intent": intent,
-        "intent_confidence": 1.0,  # Planner is always confident
-        "required_agents": required_agents
+        "intent_confidence": 1.0,
+        "required_agents": required_agents,
+        "plan_steps": plan_steps,
+        "current_step_index": 0,
+        "step_results": [],
+        "step_retry_count": 0,
+        "max_retries": 2,
+        "max_steps": 3,
     }
 
 
@@ -295,6 +298,183 @@ async def execute_agents(state: JarvisState) -> JarvisState:
     }
 
 
+async def prepare_step(state: JarvisState) -> JarvisState:
+    """Prepare the current step for execution."""
+    steps = state.get("plan_steps", [])
+    idx = state.get("current_step_index", 0)
+
+    if idx >= len(steps):
+        return state
+
+    current_step = steps[idx]
+    step_agents = current_step.get("agents", [])
+    step_goal = current_step.get("goal", "")
+
+    enriched = state.get("enriched_input", state["current_input"])
+    prev_results = state.get("step_results", [])
+
+    if prev_results:
+        prev_context = "\n".join([
+            f"[Risultato step {i+1}]: {r.get('summary', str(r.get('data', '')))[:500]}"
+            for i, r in enumerate(prev_results)
+        ])
+        enriched = f"{enriched}\n\nCONTESTO DAI PASSAGGI PRECEDENTI:\n{prev_context}"
+
+    logger.info(f"Preparing step {idx+1}/{len(steps)}: agents={step_agents}, goal={step_goal}")
+
+    return {
+        **state,
+        "required_agents": step_agents,
+        "enriched_input": enriched,
+        "agent_results": {},
+    }
+
+
+async def verify_result(state: JarvisState) -> JarvisState:
+    """Verify if the current step's result is satisfactory."""
+    steps = state.get("plan_steps", [])
+    idx = state.get("current_step_index", 0)
+    agent_results = state.get("agent_results", {})
+
+    if idx >= len(steps):
+        return state
+
+    has_errors = any(
+        not r.get("success", False)
+        for r in agent_results.values()
+    )
+
+    step_summary = {}
+    for agent_name, result in agent_results.items():
+        if result.get("success"):
+            data = result.get("data")
+            step_summary = {
+                "agent": agent_name,
+                "success": True,
+                "data": data,
+                "summary": str(data)[:500] if data else "",
+            }
+        else:
+            step_summary = {
+                "agent": agent_name,
+                "success": False,
+                "error": result.get("error", "Unknown error"),
+                "summary": f"Errore: {result.get('error', 'Unknown')}",
+            }
+
+    new_step_results = list(state.get("step_results", []))
+    new_step_results.append(step_summary)
+
+    if has_errors:
+        logger.warning(f"Step {idx+1} had errors, retry_count={state.get('step_retry_count', 0)}")
+    else:
+        logger.info(f"Step {idx+1} completed successfully")
+
+    return {
+        **state,
+        "step_results": new_step_results,
+    }
+
+
+async def replan_step(state: JarvisState) -> JarvisState:
+    """Replan the current step after a failure."""
+    steps = state.get("plan_steps", [])
+    idx = state.get("current_step_index", 0)
+    retry_count = state.get("step_retry_count", 0)
+
+    if idx >= len(steps):
+        return state
+
+    current_step = steps[idx]
+    error_info = state.get("step_results", [])[-1] if state.get("step_results") else {}
+
+    logger.info(f"Replanning step {idx+1}, attempt {retry_count + 1}")
+
+    error_msg = error_info.get("error", "Unknown error")
+    original_goal = current_step.get("goal", "")
+
+    try:
+        replan_prompt = f"""L'azione precedente e fallita.
+Obiettivo: {original_goal}
+Errore: {error_msg}
+Agenti usati: {current_step.get('agents', [])}
+
+Suggerisci un approccio alternativo. Rispondi con JSON:
+{{"agents": ["agent1"], "goal": "nuovo approccio"}}"""
+
+        response = await gemini.generate(
+            replan_prompt,
+            system_instruction="Sei un planner. Rispondi SOLO con JSON valido.",
+            model="gemini-2.5-flash",
+            temperature=0.2
+        )
+
+        import json
+        clean = response.strip()
+        if clean.startswith("```"):
+            clean = clean.split("```")[1]
+            if clean.startswith("json"):
+                clean = clean[4:]
+            clean = clean.strip()
+
+        new_plan = json.loads(clean)
+        new_agents = [a for a in new_plan.get("agents", []) if a in AGENTS]
+
+        if new_agents:
+            new_steps = list(steps)
+            new_steps[idx] = {
+                "agents": new_agents,
+                "goal": new_plan.get("goal", original_goal)
+            }
+            new_results = list(state.get("step_results", []))
+            if new_results:
+                new_results.pop()
+
+            return {
+                **state,
+                "plan_steps": new_steps,
+                "step_results": new_results,
+                "step_retry_count": retry_count + 1,
+            }
+
+    except Exception as e:
+        logger.warning(f"Replan failed: {e}")
+
+    return {
+        **state,
+        "step_retry_count": retry_count + 1,
+    }
+
+
+def should_continue_steps(state: JarvisState) -> str:
+    """Decide whether to continue to next step, retry, or generate response."""
+    steps = state.get("plan_steps", [])
+    idx = state.get("current_step_index", 0)
+    step_results = state.get("step_results", [])
+    retry_count = state.get("step_retry_count", 0)
+    max_retries = state.get("max_retries", 2)
+
+    last_result = step_results[-1] if step_results else {}
+    has_error = not last_result.get("success", True)
+
+    if has_error and retry_count < max_retries:
+        return "retry_step"
+
+    if idx + 1 < len(steps) and not has_error:
+        return "next_step"
+
+    return "generate_response"
+
+
+def advance_step(state: JarvisState) -> JarvisState:
+    """Move to the next step."""
+    return {
+        **state,
+        "current_step_index": state.get("current_step_index", 0) + 1,
+        "step_retry_count": 0,
+    }
+
+
 async def generate_response(state: JarvisState) -> JarvisState:
     logger.info("Generating response...")
     """Generate final response using LLM."""
@@ -330,6 +510,15 @@ async def generate_response(state: JarvisState) -> JarvisState:
             agent_data_str += f"\n[{agent_name.upper()}]\n{result.get('data')}\n"
         else:
             agent_data_str += f"\n[{agent_name.upper()}] Errore: {result.get('error')}\n"
+
+    # Add multi-step context if applicable
+    step_results = state.get("step_results", [])
+    if len(step_results) > 1:
+        steps_str = "\n".join([
+            f"[STEP {i+1}] {r.get('summary', 'N/A')}"
+            for i, r in enumerate(step_results)
+        ])
+        agent_data_str = f"{steps_str}\n{agent_data_str}"
 
     # Format memory facts
     memory_str = "\n".join([f"- {fact}" for fact in memory_facts]) if memory_facts else "Nessun fatto memorizzato"
@@ -421,34 +610,51 @@ def should_use_agents(state: JarvisState) -> Literal["use_agents", "direct_respo
 
 
 def build_graph() -> StateGraph:
-    """Build the Jarvis orchestrator graph."""
+    """Build the Jarvis orchestrator graph with multi-step support."""
     graph = StateGraph(JarvisState)
 
-    # Add nodes
     graph.add_node("analyze_intent", analyze_intent)
     graph.add_node("load_memory", load_memory)
+    graph.add_node("prepare_step", prepare_step)
     graph.add_node("enrich_query", enrich_query)
     graph.add_node("check_freshness", check_freshness)
     graph.add_node("execute_agents", execute_agents)
+    graph.add_node("verify_result", verify_result)
+    graph.add_node("replan_step", replan_step)
+    graph.add_node("advance_step", advance_step)
     graph.add_node("generate_response", generate_response)
     graph.add_node("extract_facts", extract_facts)
 
-    # Set entry point
     graph.set_entry_point("analyze_intent")
 
-    # Add edges
     graph.add_edge("analyze_intent", "load_memory")
     graph.add_conditional_edges(
         "load_memory",
         should_use_agents,
         {
-            "use_agents": "enrich_query",
+            "use_agents": "prepare_step",
             "direct_response": "generate_response"
         }
     )
+
+    graph.add_edge("prepare_step", "enrich_query")
     graph.add_edge("enrich_query", "check_freshness")
     graph.add_edge("check_freshness", "execute_agents")
-    graph.add_edge("execute_agents", "generate_response")
+    graph.add_edge("execute_agents", "verify_result")
+
+    graph.add_conditional_edges(
+        "verify_result",
+        should_continue_steps,
+        {
+            "next_step": "advance_step",
+            "retry_step": "replan_step",
+            "generate_response": "generate_response",
+        }
+    )
+
+    graph.add_edge("advance_step", "prepare_step")
+    graph.add_edge("replan_step", "prepare_step")
+
     graph.add_edge("generate_response", "extract_facts")
     graph.add_edge("extract_facts", END)
 
@@ -481,7 +687,13 @@ async def process_message(user_id: str, message: str, history: list = None) -> s
         "memory_context": [],
         "entity_context": [],
         "final_response": None,
-        "response_generated": False
+        "response_generated": False,
+        "plan_steps": [],
+        "current_step_index": 0,
+        "step_results": [],
+        "step_retry_count": 0,
+        "max_retries": 2,
+        "max_steps": 3,
     }
 
     # Run the graph

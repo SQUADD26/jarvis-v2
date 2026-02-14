@@ -36,3 +36,9 @@ supabase_client = SupabaseClient()
 
 def get_db() -> Client:
     return supabase_client.client
+
+
+async def run_db(fn):
+    """Run a synchronous Supabase call in a thread to avoid blocking the event loop."""
+    import asyncio
+    return await asyncio.to_thread(fn)

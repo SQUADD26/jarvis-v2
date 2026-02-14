@@ -14,6 +14,7 @@ class GeminiClient:
         self.client = genai.Client(api_key=settings.google_api_key)
         self.default_model = settings.default_model
         self.powerful_model = settings.powerful_model
+        self.embedding_model = settings.embedding_model
         self._current_user_id: Optional[str] = None
 
     def set_user_context(self, user_id: str):
@@ -155,19 +156,27 @@ class GeminiClient:
 
     async def embed(self, text: str) -> list[float]:
         """Generate embedding for text."""
-        response = await self.client.aio.models.embed_content(
-            model="text-embedding-004",
-            contents=text
-        )
-        return response.embeddings[0].values
+        try:
+            response = await self.client.aio.models.embed_content(
+                model=self.embedding_model,
+                contents=text
+            )
+            return response.embeddings[0].values
+        except Exception as e:
+            logger.error(f"Embedding failed for model {self.embedding_model}: {e}")
+            raise
 
     async def embed_batch(self, texts: list[str]) -> list[list[float]]:
         """Generate embeddings for multiple texts."""
-        response = await self.client.aio.models.embed_content(
-            model="text-embedding-004",
-            contents=texts
-        )
-        return [emb.values for emb in response.embeddings]
+        try:
+            response = await self.client.aio.models.embed_content(
+                model=self.embedding_model,
+                contents=texts
+            )
+            return [emb.values for emb in response.embeddings]
+        except Exception as e:
+            logger.error(f"Batch embedding failed for model {self.embedding_model}: {e}")
+            raise
 
 
 # Singleton

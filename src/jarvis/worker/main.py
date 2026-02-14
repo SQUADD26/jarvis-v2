@@ -2,7 +2,7 @@
 
 import asyncio
 import signal
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from jarvis.config import get_settings
 from jarvis.db.repositories import TaskRepository
@@ -26,6 +26,82 @@ class Worker:
         self._idle_count = 0
         self._last_cleanup = datetime.utcnow()
 
+    async def _init_scheduled_tasks(self):
+        """Initialize recurring scheduled tasks if not already queued."""
+        if not settings.briefing_user_id:
+            logger.info("No BRIEFING_USER_ID configured, skipping briefing init")
+            return
+
+        from jarvis.db.supabase_client import get_db, run_db
+        from zoneinfo import ZoneInfo
+        db = get_db()
+
+        # Check if a daily_briefing task already exists
+        existing = await run_db(lambda: db.table("task_queue")
+            .select("id")
+            .eq("task_type", "daily_briefing")
+            .in_("status", ["pending", "claimed", "running"])
+            .limit(1)
+            .execute()
+        )
+
+        if not existing.data:
+            tz = ZoneInfo(settings.briefing_timezone)
+            now_local = datetime.utcnow().replace(tzinfo=ZoneInfo("UTC")).astimezone(tz)
+
+            morning = now_local.replace(
+                hour=settings.briefing_morning_hour,
+                minute=settings.briefing_morning_minute,
+                second=0, microsecond=0
+            )
+            evening = now_local.replace(
+                hour=settings.briefing_evening_hour,
+                minute=settings.briefing_evening_minute,
+                second=0, microsecond=0
+            )
+
+            if now_local < morning:
+                next_time, next_type = morning, "morning"
+            elif now_local < evening:
+                next_time, next_type = evening, "evening"
+            else:
+                next_time, next_type = morning + timedelta(days=1), "morning"
+
+            next_utc = next_time.astimezone(ZoneInfo("UTC")).replace(tzinfo=None)
+
+            await TaskRepository.enqueue(
+                user_id=settings.briefing_user_id,
+                task_type="daily_briefing",
+                payload={"briefing_type": next_type},
+                scheduled_at=next_utc,
+                priority=9,
+            )
+            logger.info(f"Initialized daily briefing: {next_type} at {next_utc.isoformat()} UTC")
+        else:
+            logger.info("Daily briefing already scheduled, skipping init")
+
+        # Initialize email monitor if not already queued
+        existing_email = await run_db(lambda: db.table("task_queue")
+            .select("id")
+            .eq("task_type", "email_monitor")
+            .in_("status", ["pending", "claimed", "running"])
+            .limit(1)
+            .execute()
+        )
+
+        if not existing_email.data:
+            next_check = datetime.utcnow() + timedelta(minutes=1)
+            await TaskRepository.enqueue(
+                user_id=settings.briefing_user_id,
+                task_type="email_monitor",
+                payload={},
+                scheduled_at=next_check,
+                priority=7,
+            )
+            logger.info("Initialized email monitor")
+        else:
+            logger.info("Email monitor already scheduled, skipping init")
+
     async def start(self):
         """Start the worker loop."""
         logger.info(f"Worker {self.worker_id} starting...")
@@ -37,6 +113,8 @@ class Worker:
             loop.add_signal_handler(sig, self._handle_shutdown)
 
         logger.info(f"Worker {self.worker_id} ready, starting poll loop")
+
+        await self._init_scheduled_tasks()
 
         try:
             await self._poll_loop()
@@ -106,8 +184,23 @@ class Worker:
 
 async def run_worker():
     """Entry point for running the worker."""
-    worker = Worker()
-    await worker.start()
+    import fcntl
+    import sys
+
+    # Prevent duplicate instances
+    lock_file = open("/tmp/jarvis-worker.lock", "w")
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        print("ERROR: Another instance of jarvis-worker is already running. Exiting.")
+        sys.exit(1)
+
+    try:
+        worker = Worker()
+        await worker.start()
+    finally:
+        fcntl.flock(lock_file, fcntl.LOCK_UN)
+        lock_file.close()
 
 
 if __name__ == "__main__":

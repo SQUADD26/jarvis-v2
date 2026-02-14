@@ -33,7 +33,7 @@ logger = get_logger(__name__)
 settings = get_settings()
 
 # Conversation history settings
-MAX_TURNS = 15  # 15 exchanges = 30 messages (human + AI)
+MAX_TURNS = 10  # 10 exchanges = 20 messages (human + AI)
 CONVERSATION_TTL = 48 * 60 * 60  # 48 hours in seconds
 
 
