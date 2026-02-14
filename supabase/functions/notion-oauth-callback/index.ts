@@ -18,7 +18,7 @@ serve(async (req) => {
 
     const clientId = Deno.env.get("NOTION_OAUTH_CLIENT_ID")!;
     const clientSecret = Deno.env.get("NOTION_OAUTH_CLIENT_SECRET")!;
-    const redirectUri = `${Deno.env.get("SUPABASE_URL")}/functions/v1/notion-oauth-callback`;
+    const redirectUri = `${Deno.env.get("SUPABASE_PUBLIC_URL")}/functions/v1/notion-oauth-callback`;
 
     // Exchange code for access token
     const tokenRes = await fetch("https://api.notion.com/v1/oauth/token", {

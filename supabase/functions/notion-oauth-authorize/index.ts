@@ -11,7 +11,7 @@ serve(async (req) => {
     const user = await verifyUser(req);
 
     const clientId = Deno.env.get("NOTION_OAUTH_CLIENT_ID")!;
-    const redirectUri = `${Deno.env.get("SUPABASE_URL")}/functions/v1/notion-oauth-callback`;
+    const redirectUri = `${Deno.env.get("SUPABASE_PUBLIC_URL")}/functions/v1/notion-oauth-callback`;
 
     const params = new URLSearchParams({
       client_id: clientId,

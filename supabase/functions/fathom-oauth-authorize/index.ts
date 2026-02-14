@@ -11,7 +11,7 @@ serve(async (req) => {
     const user = await verifyUser(req);
 
     const clientId = Deno.env.get("FATHOM_CLIENT_ID")!;
-    const redirectUri = `${Deno.env.get("SUPABASE_URL")}/functions/v1/fathom-oauth-callback`;
+    const redirectUri = `${Deno.env.get("SUPABASE_PUBLIC_URL")}/functions/v1/fathom-oauth-callback`;
 
     const params = new URLSearchParams({
       client_id: clientId,

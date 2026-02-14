@@ -11,7 +11,7 @@ serve(async (req) => {
     const user = await verifyUser(req);
 
     const clientId = Deno.env.get("GCAL_CLIENT_ID")!;
-    const redirectUri = `${Deno.env.get("SUPABASE_URL")}/functions/v1/gcal-oauth-callback`;
+    const redirectUri = `${Deno.env.get("SUPABASE_PUBLIC_URL")}/functions/v1/gcal-oauth-callback`;
 
     const scopes = [
       "https://www.googleapis.com/auth/calendar.readonly",

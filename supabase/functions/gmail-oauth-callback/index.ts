@@ -24,7 +24,7 @@ serve(async (req) => {
         code,
         client_id: Deno.env.get("GMAIL_CLIENT_ID")!,
         client_secret: Deno.env.get("GMAIL_CLIENT_SECRET")!,
-        redirect_uri: `${Deno.env.get("SUPABASE_URL")}/functions/v1/gmail-oauth-callback`,
+        redirect_uri: `${Deno.env.get("SUPABASE_PUBLIC_URL")}/functions/v1/gmail-oauth-callback`,
         grant_type: "authorization_code",
       }),
     });

@@ -18,7 +18,7 @@ serve(async (req) => {
 
     const clientId = Deno.env.get("FATHOM_CLIENT_ID")!;
     const clientSecret = Deno.env.get("FATHOM_CLIENT_SECRET")!;
-    const redirectUri = `${Deno.env.get("SUPABASE_URL")}/functions/v1/fathom-oauth-callback`;
+    const redirectUri = `${Deno.env.get("SUPABASE_PUBLIC_URL")}/functions/v1/fathom-oauth-callback`;
 
     // Exchange code for tokens
     const tokenRes = await fetch("https://fathom.video/external/v1/oauth2/token", {
