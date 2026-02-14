@@ -39,6 +39,14 @@ class JarvisState(TypedDict):
     final_response: Optional[str]
     response_generated: bool
 
+    # Multi-step reasoning
+    plan_steps: list[dict]  # [{"agents": [...], "goal": "..."}, ...]
+    current_step_index: int
+    step_results: list[dict]  # Results from completed steps
+    step_retry_count: int
+    max_retries: int
+    max_steps: int
+
 
 # Intent categories
 INTENT_CATEGORIES = {

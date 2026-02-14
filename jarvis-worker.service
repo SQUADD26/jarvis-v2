@@ -1,0 +1,16 @@
+[Unit]
+Description=Jarvis Task Worker
+After=network.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/ai-agents
+Environment=PATH=/home/ubuntu/ai-agents/.venv/bin:/home/ubuntu/.local/bin:/usr/local/bin:/usr/bin
+EnvironmentFile=/home/ubuntu/ai-agents/.env
+ExecStart=/home/ubuntu/ai-agents/.venv/bin/python -m jarvis.worker
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

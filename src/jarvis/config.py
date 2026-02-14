@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     # LLM
     default_model: str = "gemini-2.5-flash"  # Upgraded from 2.0
     powerful_model: str = "gemini-2.5-pro-preview-05-06"
+    embedding_model: str = "models/text-embedding-004"
 
     # Notion
     notion_api_key: str = Field(default="", alias="NOTION_API_KEY")
@@ -82,6 +83,14 @@ class Settings(BaseSettings):
     worker_poll_interval_active: float = 0.5   # Polling ogni 500ms quando attivo
     worker_poll_interval_idle: float = 2.0     # Backoff a 2s quando idle
     worker_stale_timeout_minutes: int = 30     # Timeout per task bloccati
+
+    # Briefing
+    briefing_morning_hour: int = 7
+    briefing_morning_minute: int = 30
+    briefing_evening_hour: int = 20
+    briefing_evening_minute: int = 0
+    briefing_user_id: str = Field(default="", alias="BRIEFING_USER_ID")
+    briefing_timezone: str = Field(default="Europe/Rome", alias="BRIEFING_TIMEZONE")
 
     model_config = {
         "env_file": ".env",

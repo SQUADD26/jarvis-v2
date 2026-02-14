@@ -75,3 +75,4 @@ supabase/.temp/
 .serena/
 *.copia.md
 *copia.md
+*.bak.*
