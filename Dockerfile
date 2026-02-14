@@ -12,6 +12,10 @@ RUN pip install uv
 COPY pyproject.toml .
 COPY uv.lock* .
 
+# Skip playwright/patchright browser download (not needed on server)
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PATCHRIGHT_SKIP_BROWSER_DOWNLOAD=1
+
 # Install dependencies
 RUN uv sync --no-dev
 
