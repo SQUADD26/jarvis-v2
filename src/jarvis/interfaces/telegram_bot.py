@@ -17,10 +17,12 @@ ACKNOWLEDGMENT_MESSAGES = [
 
 from jarvis.config import get_settings
 from jarvis.core.orchestrator import process_message
+from jarvis.core.user_resolver import user_resolver
 from jarvis.utils.formatting import format_for_telegram
 from jarvis.core.freshness import freshness
 from jarvis.core.memory import memory
 from jarvis.db.repositories import ChatRepository, TaskRepository, LLMLogsRepository
+from jarvis.db.supabase_client import get_db, run_db
 from jarvis.db.redis_client import redis_client
 from jarvis.integrations.deepgram_stt import deepgram
 from jarvis.rag.ingestion import ingestion_pipeline
@@ -45,10 +47,10 @@ class RedisConversationCache:
         self._ttl = ttl
         self._key_prefix = "jarvis:chat:"
 
-    def _key(self, user_id: int) -> str:
+    def _key(self, user_id: str) -> str:
         return f"{self._key_prefix}{user_id}"
 
-    async def get(self, user_id: int) -> list:
+    async def get(self, user_id: str) -> list:
         """Get conversation history for user from Redis."""
         try:
             data = await redis_client.get(self._key(user_id))
@@ -65,7 +67,7 @@ class RedisConversationCache:
             logger.error(f"Redis get conversation failed: {e}")
         return []
 
-    async def update(self, user_id: int, user_message: str, assistant_response: str):
+    async def update(self, user_id: str, user_message: str, assistant_response: str):
         """Update conversation history in Redis."""
         try:
             # Get existing history
@@ -86,7 +88,7 @@ class RedisConversationCache:
         except Exception as e:
             logger.error(f"Redis update conversation failed: {e}")
 
-    async def clear(self, user_id: int):
+    async def clear(self, user_id: str):
         """Clear conversation history for user."""
         try:
             await redis_client.delete(self._key(user_id))
@@ -98,18 +100,55 @@ class RedisConversationCache:
 conversation_cache = RedisConversationCache()
 
 
-def is_authorized(user_id: int) -> bool:
-    """Check if user is authorized."""
+async def resolve_user(telegram_id: int) -> tuple[bool, str | None]:
+    """Check authorization and resolve Telegram ID to Supabase Auth UUID.
+
+    Returns (is_authorized, uuid_or_none).
+    - If whitelisted AND has linked profile: (True, uuid)
+    - If whitelisted but no profile linked: (True, None)
+    - If not whitelisted: (False, None)
+    """
     allowed = settings.telegram_allowed_users_list
-    return not allowed or user_id in allowed
+    if allowed and telegram_id not in allowed:
+        return False, None
+
+    uuid = await user_resolver.resolve_telegram_id(telegram_id)
+    return True, uuid
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /start command."""
-    user_id = update.effective_user.id
+    """Handle /start command, including deep link for Telegram account linking."""
+    telegram_id = update.effective_user.id
+    authorized, _ = await resolve_user(telegram_id)
 
-    if not is_authorized(user_id):
+    if not authorized:
         await update.message.reply_text("Non sei autorizzato ad usare questo bot.")
+        return
+
+    # Deep link: /start link_TOKEN
+    if context.args and context.args[0].startswith("link_"):
+        token = context.args[0][5:]  # strip "link_" prefix
+        try:
+            result = await run_db(
+                lambda: get_db().rpc(
+                    "link_telegram",
+                    {"p_token": token, "p_telegram_id": telegram_id},
+                ).execute()
+            )
+            if result.data:
+                user_resolver.invalidate_telegram(telegram_id)
+                await update.message.reply_text(
+                    "Account collegato con successo! Ora puoi usare Jarvis da Telegram."
+                )
+            else:
+                await update.message.reply_text(
+                    "Token non valido o scaduto. Riprova dalla webapp."
+                )
+        except Exception as e:
+            logger.error(f"Deep link failed for {telegram_id}: {e}")
+            await update.message.reply_text(
+                "Errore nel collegamento. Il token potrebbe essere scaduto, riprova dalla webapp."
+            )
         return
 
     await update.message.reply_text(
@@ -125,6 +164,10 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /help command."""
+    authorized, _ = await resolve_user(update.effective_user.id)
+    if not authorized:
+        return
+
     await update.message.reply_text(
         "Comandi disponibili:\n"
         "/start - Avvia il bot\n"
@@ -140,9 +183,15 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def refresh_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /refresh command."""
-    user_id = str(update.effective_user.id)
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(int(user_id)):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     args = context.args
@@ -161,9 +210,15 @@ async def refresh_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /memory command."""
-    user_id = str(update.effective_user.id)
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(int(user_id)):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     facts = await memory.get_all_facts(user_id)
@@ -187,9 +242,15 @@ async def memory_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /clear command."""
-    user_id = update.effective_user.id
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(user_id):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     await conversation_cache.clear(user_id)
@@ -198,10 +259,15 @@ async def clear_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /remind command."""
-    user_id = update.effective_user.id
-    user_id_str = str(user_id)
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(user_id):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     args = context.args
@@ -264,7 +330,7 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Create the reminder task
     try:
         task = await TaskRepository.enqueue(
-            user_id=user_id_str,
+            user_id=user_id,
             task_type="reminder",
             payload={"message": message},
             scheduled_at=parsed_date,
@@ -287,14 +353,19 @@ async def remind_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /tasks command - show pending tasks."""
-    user_id = update.effective_user.id
-    user_id_str = str(user_id)
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(user_id):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     try:
-        tasks = await TaskRepository.get_user_tasks(user_id_str, limit=10)
+        tasks = await TaskRepository.get_user_tasks(user_id, limit=10)
 
         if not tasks:
             await update.message.reply_text("Non hai task in corso.")
@@ -332,18 +403,23 @@ async def tasks_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def costs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /costs command - show LLM usage costs."""
-    user_id = update.effective_user.id
-    user_id_str = str(user_id)
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(user_id):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     try:
         # Get today's cost
-        today_cost = await LLMLogsRepository.get_total_cost_today(user_id_str)
+        today_cost = await LLMLogsRepository.get_total_cost_today(user_id)
 
         # Get costs by model for last 30 days
-        costs = await LLMLogsRepository.get_costs_by_period(user_id=user_id_str)
+        costs = await LLMLogsRepository.get_costs_by_period(user_id=user_id)
 
         text = f"Costi LLM:\n\nOggi: ${today_cost:.4f}\n"
 
@@ -367,10 +443,15 @@ async def costs_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming voice messages."""
-    user_id = update.effective_user.id
-    user_id_str = str(user_id)
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(user_id):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     # Send acknowledgment
@@ -407,12 +488,12 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ext = ".ogg"
 
         # Transcribe with Deepgram Nova-3
-        deepgram.set_user_context(user_id_str)
+        deepgram.set_user_context(user_id)
         transcribed_text = await deepgram.transcribe_bytes(
             bytes(audio_data),
             filename=f"voice{ext}",
             language="it",
-            user_id=user_id_str
+            user_id=user_id
         )
 
         if not transcribed_text or not transcribed_text.strip():
@@ -424,7 +505,7 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         # Process the transcribed text as a normal message
         history = await conversation_cache.get(user_id)
-        response = await process_message(user_id_str, transcribed_text, history.copy())
+        response = await process_message(user_id, transcribed_text, history.copy())
 
         # Update cache
         await conversation_cache.update(user_id, transcribed_text, response)
@@ -450,10 +531,15 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming document files (PDF, TXT, etc.)."""
-    user_id = update.effective_user.id
-    user_id_str = str(user_id)
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(user_id):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     document = update.message.document
@@ -519,7 +605,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Ingest into RAG
         result = await ingestion_pipeline.ingest_text(
             text=text,
-            user_id=user_id_str,
+            user_id=user_id,
             title=file_name,
             source_type="file" if file_type == "pdf" else "text",
             custom_metadata={
@@ -623,10 +709,15 @@ async def _send_split_response(update: Update, response: str):
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle incoming text messages."""
-    user_id = update.effective_user.id
-    user_id_str = str(user_id)
+    telegram_id = update.effective_user.id
+    authorized, user_id = await resolve_user(telegram_id)
 
-    if not is_authorized(user_id):
+    if not authorized:
+        return
+    if not user_id:
+        await update.message.reply_text(
+            f"Per usare Jarvis, registrati su {settings.webapp_url} e collega il tuo account Telegram."
+        )
         return
 
     message = update.message.text
@@ -646,7 +737,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         history = await conversation_cache.get(user_id)
 
         # Process message with Jarvis
-        response = await process_message(user_id_str, message, history.copy())
+        response = await process_message(user_id, message, history.copy())
 
         # Update cache with new messages
         await conversation_cache.update(user_id, message, response)
@@ -700,25 +791,30 @@ async def _schedule_notion_proactive_checks():
     if not allowed:
         return
 
-    for user_id in allowed:
-        user_id_str = str(user_id)
+    for telegram_id in allowed:
         try:
+            # Resolve to UUID
+            uuid = await user_resolver.resolve_telegram_id(telegram_id)
+            if not uuid:
+                logger.warning(f"No UUID found for telegram_id {telegram_id}, skipping Notion check")
+                continue
+
             # Check if a pending/claimed notion_proactive_check already exists
-            existing = await TaskRepository.get_user_tasks(user_id_str, status="pending", limit=50)
+            existing = await TaskRepository.get_user_tasks(uuid, status="pending", limit=50)
             has_check = any(t.get("task_type") == "notion_proactive_check" for t in existing)
 
             if not has_check:
                 scheduled_at = datetime.utcnow() + timedelta(minutes=5)
                 await TaskRepository.enqueue(
-                    user_id=user_id_str,
+                    user_id=uuid,
                     task_type="notion_proactive_check",
                     payload={},
                     scheduled_at=scheduled_at,
                     priority=8,
                 )
-                logger.info(f"Scheduled initial Notion proactive check for user {user_id}")
+                logger.info(f"Scheduled initial Notion proactive check for user {uuid}")
         except Exception as e:
-            logger.warning(f"Failed to schedule Notion check for user {user_id}: {e}")
+            logger.warning(f"Failed to schedule Notion check for telegram_id {telegram_id}: {e}")
 
 
 async def run_bot():

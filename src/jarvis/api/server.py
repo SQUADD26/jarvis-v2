@@ -188,6 +188,48 @@ async def get_costs(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/integrations/status")
+async def integrations_status(auth: dict = Depends(verify_auth)):
+    """Return connection status for each OAuth provider."""
+    user_id = auth.get("user_id")
+    if not user_id or user_id == "api_user":
+        raise HTTPException(status_code=400, detail="JWT auth required")
+
+    try:
+        from jarvis.db.supabase_client import get_supabase_client
+        supabase = get_supabase_client()
+
+        providers = {
+            "gmail": "gmail_accounts",
+            "google_calendar": "google_calendar_accounts",
+            "notion": "notion_accounts",
+            "fathom": "fathom_oauth_tokens",
+        }
+
+        result = {}
+        for provider, table in providers.items():
+            row = supabase.table(table).select("id, updated_at").eq(
+                "user_id", user_id
+            ).limit(1).execute()
+            result[provider] = {
+                "connected": len(row.data) > 0,
+                "updated_at": row.data[0]["updated_at"] if row.data else None,
+            }
+
+        # Telegram: check user_profiles
+        profile = supabase.table("user_profiles").select("telegram_id").eq(
+            "id", user_id
+        ).maybe_single().execute()
+        result["telegram"] = {
+            "connected": bool(profile.data and profile.data.get("telegram_id")),
+        }
+
+        return {"integrations": result}
+    except Exception as e:
+        logger.error(f"Integrations status error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Static files (production) ─────────────────────────────
 
 frontend_dir = os.path.join(os.path.dirname(__file__), "..", "..", "..", "frontend", "dist")

@@ -2,6 +2,7 @@
 
 import httpx
 from jarvis.config import get_settings
+from jarvis.core.user_resolver import user_resolver
 from jarvis.utils.formatting import format_for_telegram
 from jarvis.utils.logging import get_logger
 
@@ -21,6 +22,14 @@ class TelegramNotifier:
         if self._client is None:
             self._client = httpx.AsyncClient(timeout=30.0)
         return self._client
+
+    async def _resolve_chat_id(self, user_id: str) -> str | None:
+        """Resolve a Supabase UUID to a Telegram chat ID."""
+        telegram_id = await user_resolver.resolve_uuid_to_telegram(user_id)
+        if telegram_id is None:
+            logger.warning(f"No Telegram ID found for user {user_id}, cannot send notification")
+            return None
+        return str(telegram_id)
 
     async def send_message(
         self,
@@ -61,10 +70,13 @@ class TelegramNotifier:
 
     async def notify_task_started(self, user_id: str, task_type: str, description: str = None):
         """Notify user that a task has started."""
+        chat_id = await self._resolve_chat_id(user_id)
+        if not chat_id:
+            return
         text = f"Sto lavorando su: <b>{task_type}</b>"
         if description:
             text += f"\n{description}"
-        await self.send_message(user_id, text)
+        await self.send_message(chat_id, text)
 
     async def notify_task_completed(
         self,
@@ -73,10 +85,13 @@ class TelegramNotifier:
         result: str = None
     ):
         """Notify user that a task has completed."""
+        chat_id = await self._resolve_chat_id(user_id)
+        if not chat_id:
+            return
         text = f"Ho completato: <b>{task_type}</b>"
         if result:
             text += f"\n\n{result}"
-        await self.send_message(user_id, text)
+        await self.send_message(chat_id, text)
 
     async def notify_task_failed(
         self,
@@ -85,10 +100,13 @@ class TelegramNotifier:
         error: str = None
     ):
         """Notify user that a task has failed."""
+        chat_id = await self._resolve_chat_id(user_id)
+        if not chat_id:
+            return
         text = f"Non sono riuscito a completare: <b>{task_type}</b>"
         if error:
             text += f"\nErrore: {error}"
-        await self.send_message(user_id, text)
+        await self.send_message(chat_id, text)
 
     async def notify_reminder(
         self,
@@ -96,8 +114,11 @@ class TelegramNotifier:
         message: str
     ):
         """Send a reminder notification."""
+        chat_id = await self._resolve_chat_id(user_id)
+        if not chat_id:
+            return
         text = f"Promemoria: {message}"
-        await self.send_message(user_id, text)
+        await self.send_message(chat_id, text)
 
     async def close(self):
         """Close the HTTP client."""

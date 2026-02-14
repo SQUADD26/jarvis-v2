@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     # Apify (Google Search Scraper)
     apify_api_key: str = Field(default="", alias="APIFY_API_KEY")
 
+    # Web app
+    webapp_url: str = Field(default="https://jarvis.squadd.it", alias="WEBAPP_URL")
+
     # Jarvis API (for voice client communication)
     jarvis_api_key: str = Field(default="", alias="JARVIS_API_KEY")
     jarvis_api_url: str = Field(default="", alias="JARVIS_API_URL")  # e.g. http://vps:8000
