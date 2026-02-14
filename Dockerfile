@@ -2,8 +2,8 @@ FROM python:3.12-slim
 
 WORKDIR /app
 
-# Install build dependencies for native packages (webrtcvad, etc.)
-RUN apt-get update && apt-get install -y --no-install-recommends gcc build-essential && rm -rf /var/lib/apt/lists/*
+# Install build dependencies for native packages (webrtcvad, pyaudio, etc.)
+RUN apt-get update && apt-get install -y --no-install-recommends gcc build-essential portaudio19-dev && rm -rf /var/lib/apt/lists/*
 
 # Install uv
 RUN pip install uv
